@@ -1,0 +1,38 @@
+
+# App metadata and description
+app:
+  name: "AI Shopping Recommendation System"
+  version: "1.0.0"
+  description: >
+    "AI Shopping Recommendation Assistant is a hybrid RAG-based system thatuses LLMs
+    and semantic search to answer user queries and recommend relevant products. It
+    combines intent understanding, vector search, and filtering to deliver contextual
+    responses alongside product cards with images and key details."
+
+
+# Offline knowledge base configuration
+knowledge_base:
+  root_dir: "knoweledge_base"
+  supportted_extensions:
+    - ".pdf"
+    - ".md"
+    - ".txt"
+    - ".docx"
+    - ".html"
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+  encoding: "utf-8"
+
+
+# Operations
+operations:
+  observability:
+    structured_logging: true                    # Use JSON-structured logs (for ELK/Splunk ingestion)
+
+# Logging
+logging:
+  format: "json"                                # Log format: json | text
+  rotation: "daily"                             # Log rotation schedule: daily | hourly | size
+  retention_days: 30                            # Days to retain log files
+  log_dir: "logs"                               # Directory for log files
