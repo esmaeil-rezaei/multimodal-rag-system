@@ -55,7 +55,11 @@ class AppConfig():
         """Knowledge base root directory and file-type settings."""
         return self._data["knowledge_base"]
 
-
+    @property
+    def ingestion(self) -> Dict[str, Any]:
+        """Ingestion pipeline settings (parsing, tables, images, dedup, versioning)."""
+        return self._data["ingestion"]
+        
     @property
     def operations(self) -> Dict[str, Any]:
         """Production ops: cache, ACL, PII, observability."""

@@ -1,4 +1,151 @@
+import hashlib
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional, Set
+
+from src.config.settings import get_config
+from src.ingestion.parser import DocumentParser, ParsedChunk
+from src.utils.logger import get_logger, set_correlation_id
+
+
+
+logger = get_logger(__name__)
+
 
 class IngestionPipeline:
-    def __init__(self, namespace: str): 
-        print(f"Initializing ingestion pipeline for namespace: {namespace}")
+    """
+    End-to-end document ingestion pipeline.
+
+    Corrected stage order:
+      scan → parse → stamp → PII redact → fingerprint
+           → consolidate → dedup → chunk → embed → upsert
+    """
+    
+    def __init__(self) -> None: 
+        self._cfg             = get_config()
+        self.kb_cfg           = self._cfg.knowledge_base
+        self._ingest_cfg      = self._cfg.ingestion
+        self._versioning_cfg  = self._ingest_cfg["versioning"]
+
+        self._parser          = DocumentParser()
+
+        self._processed_hashes: Dict[str, str] = {}
+
+
+    
+    def run(self, namespace: Optional[str] = None) -> Dict[str, int]:
+        """
+        Run a full ingestion pass over the knowledge base directory.
+
+        Returns summary stats: files_scanned, chunks_indexed, chunks_skipped.
+        """
+
+        set_correlation_id()
+        root = Path(self.kb_cfg["root_dir"])
+        
+        if not root.exists():
+            raise FileNotFoundError(f"Knowledge base root not found: {root}")
+
+        supported_ext: Set[str] = set(self.kb_cfg["supported_extensions"])
+        files = [
+            f for f in root.rglob("*")
+            if f.is_file() and f.suffix.lower() in supported_ext
+        ]
+        logger.info(f"Ingestion started: {len(files)} files discovered in {root}")
+
+        stats = {"files_scanned": 0, "chunks_indexed": 0, "chunks_skipped": 0}
+
+        for file_path in files:
+            source_name = file_path.parent.name
+            try:
+                indexed, skipped = self._ingest_file(file_path, source_name, namespace)
+                stats["files_scanned"] += 1
+                stats["chunks_indexed"] += 1
+                stats["chunks_skipped"] += 1
+            except Exception as exc:
+                logger.error(f"Failed to ingest {file_path}: {exc}", exc_info=True)
+
+        logger.info("Ingestion complete", extra=stats)
+        return stats
+    
+
+
+    # ---------------------------------------------------------------
+    # Single-file ingestion
+    # ---------------------------------------------------------------
+    def _ingest_file(
+        self,
+        file_path: Path,
+        source_name: str,
+        namespace: Optional[str],
+    ) -> tuple[int, int]:
+        """
+        Process one file through the corrected pipeline stage order.
+
+        Stage order (with rationale for each position):
+          1. parse       — extract raw elements (per-element granularity)
+          2. stamp       — attach ingestion_ts and doc_version before anything reads them
+          3. PII redact  — mutate text BEFORE computing fingerprints
+          4. fingerprint — compute chunk_id on the final clean text
+          5. consolidate — group elements into sections
+          6. dedup       — compare section-sized chunks, not sentence fragments
+          7. chunk       — split sections; pass tables/images atomically
+          8. embed+upsert
+        """
+
+        # Delta check at file level
+        if self._versioning_cfg["delta_ingestion"]:
+            file_hash = self._hash_file(file_path)
+            if self._processed_hashes.get(str(file_path)) == file_hash:
+                logger.debug(f"Delta skip (unchanged): {file_path.name}")
+                return 0, 0
+            self._processed_hashes[str(file_path)] = file_hash
+
+        logger.info(f"Ingesting: {file_path.name} [{source_name}]")
+
+
+        # ----- Parse -------
+        raw_chunks: List[ParsedChunk] = self._parser.parse_file(file_path, source_name)
+        if not raw_chunks:
+            logger.warning(f"No content extracted from {file_path.name}")
+            return 0, 0
+        
+        return 0, 0
+
+
+
+
+
+    # -------------------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _hash_file(file_path: Path) -> str:
+        """
+        SHA-256 of file byte content.
+        Read in 64 KB blocks to handle large files without loading into memory.
+        """
+        sha = hashlib.sha256()
+        with open(file_path, "rb") as fh:
+            for block in iter(lambda: fh.read(65536), b""):
+                sha.update(block)
+        print(sha)
+        return sha.hexdigest()
+    
+
+    @staticmethod
+    def _extract_version(file_path: Path) -> Optional[str]:
+        """
+        Extract a version string from the file name.
+        Supports: "policy_v2.1.pdf", "2024-03-01_report.md"
+        """
+        name = file_path.stem
+        version_match = re.search(r"v(\d+(?:\.\d+)+)", name, re.IGNORECASE)
+        if version_match:
+            return version_match.group(0)
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", name)
+        if date_match:
+            return date_match.group(1)
+        return None

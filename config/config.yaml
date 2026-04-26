@@ -1,5 +1,7 @@
 
-# App metadata and description
+# -----------------------------------------------------------------------------
+# Application Metadata
+# -----------------------------------------------------------------------------
 app:
   name: "AI Shopping Recommendation System"
   version: "1.0.0"
@@ -10,10 +12,12 @@ app:
     responses alongside product cards with images and key details."
 
 
-# Offline knowledge base configuration
+# -----------------------------------------------------------------------------
+# Knowledge Base — Source Document Settings
+# -----------------------------------------------------------------------------
 knowledge_base:
-  root_dir: "knoweledge_base"
-  supportted_extensions:
+  root_dir: "knowledge_base"
+  supported_extensions:
     - ".pdf"
     - ".md"
     - ".txt"
@@ -24,13 +28,66 @@ knowledge_base:
     - ".jpeg"
   encoding: "utf-8"
 
+# -----------------------------------------------------------------------------
+# Data Ingestion & Preprocessing
+# -----------------------------------------------------------------------------
+ingestion:
+  # Multi-modal document parsing
+  parsing:
+    pdf_strategy: "hi_res"                      # Unstructured.io strategy: fast | hi_res | ocr_only
+    ocr_languages: ["eng", "fra", "deu"]        # Tesseract OCR language codes for scanned pages
+    extract_images: true                        # Extract embedded images from PDFs for VLM captioning
+    extract_tables: true                        # Run dedicated table extraction on every PDF
+    image_output_dir: "artifacts/extracted_images"  # Where extracted page images are saved temporarily
 
-# Operations
+  # Table extraction fidelity
+  tables:
+    extract_tables: true                        # Master toggle — set false to skip table extraction entirely
+    backend: "camelot"                          # Table extraction backend: camelot | pdfplumber | tatr
+    output_format: "markdown"                       # Serialize tables as: json | markdown
+    handle_merged_cells: true                   # Attempt to resolve merged/spanned cells
+    multi_page_tables: true                     # Stitch tables split across PDF page breaks
+    store_column_metadata: true                 # Save column names as chunk-level metadata
+
+  # Image understanding via VLM
+  image_captioning:
+    enabled: true                               # Toggle VLM captioning at ingestion time
+    model: "gpt-4o"                             # VLM to call for figure/chart/diagram captions
+    max_tokens: 300                             # Max caption length in tokens
+    store_clip_embeddings: true                 # Also embed images with CLIP for image-level retrieval
+    clip_model: "openai/clip-vit-large-patch14" # CLIP checkpoint for image embeddings
+
+  # Duplicate & near-duplicate detection
+  deduplication:
+    enabled: true                               # Enable deduplication before indexing
+    exact_hash_algorithm: "sha256"              # Hash algorithm for exact-duplicate detection
+    fuzzy_method: "minhash"                     # Fuzzy dedup method: minhash | simhash
+    minhash_num_perm: 128                       # Number of MinHash permutations (higher = more accurate)
+    jaccard_threshold: 0.85                     # Chunks with Jaccard similarity above this are near-dups
+    keep_strategy: "newest"                     # Which dup to keep: newest | oldest | highest_quality
+
+  # Data freshness & versioning
+  versioning:
+    add_timestamp: true                         # Embed ingestion timestamp in every chunk's metadata
+    delta_ingestion: true                       # Only re-ingest chunks whose source file changed
+    ttl_days: 365                               # Soft expiry: flag chunks older than this for review
+    version_field: "doc_version"                # Metadata key for document version string
+
+
+
+
+
+# -----------------------------------------------------------------------------
+# Production & Operations
+# -----------------------------------------------------------------------------
 operations:
   observability:
     structured_logging: true                    # Use JSON-structured logs (for ELK/Splunk ingestion)
 
+
+# -----------------------------------------------------------------------------
 # Logging
+# -----------------------------------------------------------------------------
 logging:
   format: "json"                                # Log format: json | text
   rotation: "daily"                             # Log rotation schedule: daily | hourly | size

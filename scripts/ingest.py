@@ -23,7 +23,8 @@ def main() -> None:
     set_correlation_id()
     logger.info(f"Starting ingestion for namespace='{args.namespace}'")
 
-    pipeline = IngestionPipeline(args.namespace)
+    pipeline = IngestionPipeline()
+    stats = pipeline.run(namespace=args.namespace)
 
 
 if __name__ == "__main__":
