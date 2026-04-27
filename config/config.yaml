@@ -81,8 +81,40 @@ ingestion:
 # Production & Operations
 # -----------------------------------------------------------------------------
 operations:
+  performance:
+    async_retrieval: true                       # Run retrieval pipeline asynchronously
+    semantic_cache:
+      enabled: true                             # Cache answers for semantically similar queries
+      backend: "redis"                          # Cache backend: redis | in_memory
+      similarity_threshold: 0.95               # Cosine similarity to treat as cache hit
+      ttl_seconds: 3600                         # Cache entry TTL in seconds
+    two_stage_retrieval: true                   # Stage 1: fast ANN; Stage 2: slow but precise reranker
+
+  access_control:
+    enabled: true                               # Enable multi-tenant namespace isolation
+    backend: "qdrant_namespaces"                # ACL backend: qdrant_namespaces | weaviate_rbac
+    metadata_acl_field: "allowed_roles"         # Chunk metadata field storing allowed role list
+    jwt_auth: true                              # Enforce JWT-based auth on every query request
+
+  pii:
+    detect_at_ingestion: true                   # Scan and redact PII when chunk is first ingested
+    detection_engine: "presidio"                # PII engine: presidio | aws_comprehend
+    entities_to_redact:                         # PII entity types to redact
+      - "PERSON"
+      - "EMAIL_ADDRESS"
+      - "PHONE_NUMBER"
+      - "CREDIT_CARD"
+      - "US_SSN"
+      - "IP_ADDRESS"
+    sensitivity_tagging: true                   # Tag chunk metadata with sensitivity level
+    output_scanning: true                       # Also scan generated answers before returning to user
+
   observability:
+    tracing_enabled: true                       # Enable end-to-end span tracing
+    trace_backends: ["langsmith", "arize_phoenix", "helicone"]  # Active trace sinks
+    log_token_usage: true                       # Log prompt + completion token counts per request
     structured_logging: true                    # Use JSON-structured logs (for ELK/Splunk ingestion)
+    log_chunk_ids: true                         # Include source chunk IDs in every log entry
 
 
 # -----------------------------------------------------------------------------

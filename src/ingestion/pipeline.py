@@ -6,6 +6,8 @@ from typing import Dict, List, Optional, Set
 
 from src.config.settings import get_config
 from src.ingestion.parser import DocumentParser, ParsedChunk
+from src.ingestion.consolidator import ChunkConsolidator
+from src.operations.ops_middleware import PIIGuard
 from src.utils.logger import get_logger, set_correlation_id
 
 
@@ -29,6 +31,8 @@ class IngestionPipeline:
         self._versioning_cfg  = self._ingest_cfg["versioning"]
 
         self._parser          = DocumentParser()
+        self._pii_gaurd       = PIIGuard()
+        self._consolidator    = ChunkConsolidator()
 
         self._processed_hashes: Dict[str, str] = {}
 
@@ -111,12 +115,36 @@ class IngestionPipeline:
             logger.warning(f"No content extracted from {file_path.name}")
             return 0, 0
         
-        return 0, 0
+        
+        # ----- Stamp timestamps -------
+        ingestion_ts = datetime.now(timezone.utc).isoformat()
+        doc_version  = self._extract_version(file_path)
+        for chunk in raw_chunks:
+            chunk.ingestion_ts = ingestion_ts
+            chunk.doc_version  = doc_version
+
+        
+        # ----- PII redaction + sensitivity tagging -------
+        for chunk in raw_chunks:
+            original_text = chunk.text
+            chunk.text = self._pii_gaurd.redact(chunk.text, context="ingestion")
+            chunk.metadata["sensitivity"] = (
+                "readacted" if chunk.text != original_text else "public"
+            )
+
+        # ----- Fingerprint on clean text -------
+        for chunk in raw_chunks:
+            chunk.chunk_id = chunk.compute_fingerprint()
 
 
+        # ----- Consolidate -------
+        consolidated = self._consolidator.consolidate(raw_chunks)
+        if not consolidated:
+            logger.warning(f"Consolidation produced no chunks for {file_path.name}")
+            return 0, 0
 
 
-
+    
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
