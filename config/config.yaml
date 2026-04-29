@@ -16,8 +16,8 @@ app:
 # Knowledge Base — Source Document Settings
 # -----------------------------------------------------------------------------
 knowledge_base:
-  root_dir: "knowledge_base"
-  supported_extensions:
+  root_dir: "knowledge_base"                    # Root folder containing all source sub-directories
+  supported_extensions:                         # File types the ingestion pipeline will process
     - ".pdf"
     - ".md"
     - ".txt"
@@ -26,13 +26,15 @@ knowledge_base:
     - ".png"
     - ".jpg"
     - ".jpeg"
-  encoding: "utf-8"
+  scan_recursively: true                        # Walk sub-folders inside root_dir
+  source_metadata_field: "source_name"          # Metadata key to store the sub-folder (source) name
+  encoding: "utf-8"                             # Default text encoding; fallback to latin-1 on error
 
 # -----------------------------------------------------------------------------
-# Data Ingestion & Preprocessing
+# Stage 1 — Data Ingestion & Preprocessing
 # -----------------------------------------------------------------------------
 ingestion:
-  # Multi-modal document parsing
+  # Challenge 01: Multi-modal document parsing
   parsing:
     pdf_strategy: "hi_res"                      # Unstructured.io strategy: fast | hi_res | ocr_only
     ocr_languages: ["eng", "fra", "deu"]        # Tesseract OCR language codes for scanned pages
@@ -40,7 +42,7 @@ ingestion:
     extract_tables: true                        # Run dedicated table extraction on every PDF
     image_output_dir: "artifacts/extracted_images"  # Where extracted page images are saved temporarily
 
-  # Table extraction fidelity
+  # Challenge 02: Table extraction fidelity
   tables:
     extract_tables: true                        # Master toggle — set false to skip table extraction entirely
     backend: "camelot"                          # Table extraction backend: camelot | pdfplumber | tatr
@@ -49,7 +51,7 @@ ingestion:
     multi_page_tables: true                     # Stitch tables split across PDF page breaks
     store_column_metadata: true                 # Save column names as chunk-level metadata
 
-  # Image understanding via VLM
+  # Challenge 03: Image understanding via VLM
   image_captioning:
     enabled: true                               # Toggle VLM captioning at ingestion time
     model: "gpt-4o"                             # VLM to call for figure/chart/diagram captions
@@ -57,7 +59,7 @@ ingestion:
     store_clip_embeddings: true                 # Also embed images with CLIP for image-level retrieval
     clip_model: "openai/clip-vit-large-patch14" # CLIP checkpoint for image embeddings
 
-  # Duplicate & near-duplicate detection
+  # Challenge 05: Duplicate & near-duplicate detection
   deduplication:
     enabled: true                               # Enable deduplication before indexing
     exact_hash_algorithm: "sha256"              # Hash algorithm for exact-duplicate detection
@@ -66,21 +68,203 @@ ingestion:
     jaccard_threshold: 0.85                     # Chunks with Jaccard similarity above this are near-dups
     keep_strategy: "newest"                     # Which dup to keep: newest | oldest | highest_quality
 
-  # Data freshness & versioning
+  # Challenge 06: Data freshness & versioning
   versioning:
     add_timestamp: true                         # Embed ingestion timestamp in every chunk's metadata
     delta_ingestion: true                       # Only re-ingest chunks whose source file changed
     ttl_days: 365                               # Soft expiry: flag chunks older than this for review
     version_field: "doc_version"                # Metadata key for document version string
 
-
-
-
+# -----------------------------------------------------------------------------
+# Stage 2 — Chunking Strategy
+# -----------------------------------------------------------------------------
+chunking:
+  strategy: "semantic"                    # fixed | semantic | hierarchical
+  chunk_size: 512                         # Max tokens per output chunk
+  min_chunk_size: 50                      # Min tokens; smaller segments are merged into neighbour
+  chunk_overlap: 64                       # (used by fixed only — ignored in semantic mode)
+  sliding_window: false                   # (used by fixed only — semantic uses embeddings)
+ 
+  # --- Semantic / hierarchical specific ---
+  breakpoint_percentile: 0.25            # Bottom N% of similarity scores become split points.
+                                          # Lower = fewer, larger chunks. Higher = more, finer chunks.
+                                          # 0.25 is the standard production default.
+  window_size: 3                          # Sentences per rolling context window before embedding.
+                                          # 3 is the standard production default.
+  override_chunk_size: 400                # appropriate for sub-section granularity in the hierarchical strategy
+  # --- Embedding backend ---
+  embedding_backend: "sentence_transformers" # "openai" | "sentence_transformers"
+  embedding_model: "BAAI/bge-large-en-v1.5"  # OpenAI model, or BIAAI checkpoint if using local
 
 # -----------------------------------------------------------------------------
-# Production & Operations
+# Stage 2 — Embedding Models
+# -----------------------------------------------------------------------------
+embeddings:
+  # Domain-specific embedding model selection
+  default_model: "BAAI/bge-large-en-v1.5"      # Primary dense embedding model
+  domain_models:                                # Override model per knowledge-base sub-folder name
+    legal: "BAAI/bge-large-en-v1.5"
+    medical: "pritamdeka/S-PubMedBert-MS-MARCO"
+    financial: "BAAI/bge-large-en-v1.5"        # BGE-large is strong for financial text too
+  # Multi-lingual & cross-lingual retrieval
+  multilingual_model: "intfloat/multilingual-e5-large"  # Used when doc language != query language
+  language_detection: true                      # Auto-detect language of each document chunk
+  cross_lingual_strategy: "retrieve_then_translate"  # translate_then_retrieve | retrieve_then_translate
+  embedding_dimensions: 1024                    # Output vector dimension of the default model
+  batch_size: 64                                # Chunks to embed per API/model call
+
+# -----------------------------------------------------------------------------
+# Stage 2 — Vector Index
+# -----------------------------------------------------------------------------
+vector_store:
+  backend: "qdrant"                             # Active vector store: qdrant | pinecone | weaviate
+  collection_name: "enterprise_rag"             # Name of the primary vector collection/index
+  distance_metric: "cosine"                     # Similarity metric: cosine | dot | euclidean
+  # Scalability — HNSW + IVF-PQ configuration
+  hnsw:
+    m: 16                                       # HNSW: number of bi-directional links per node
+    ef_construct: 200                           # HNSW: size of dynamic candidate list during index build
+    ef_search: 100                              # HNSW: size of candidate list during search
+  ivf_pq:
+    enabled: false                              # Toggle IVF-PQ compression for memory efficiency
+    nlist: 1024                                 # IVF: number of inverted lists (Voronoi cells)
+    m_pq: 8                                     # PQ: number of sub-quantizers
+  # Sparse + dense hybrid indexing
+  hybrid_search:
+    enabled: true                               # Enable BM25 + dense parallel search
+    sparse_backend: "elasticsearch"             # Sparse index backend: elasticsearch | opensearch
+    sparse_index_name: "rag_sparse"             # Elasticsearch index name for BM25
+    fusion_method: "rrf"                        # Merge method: rrf (reciprocal rank fusion) | linear
+    rrf_k: 60                                   # RRF constant k (typical: 60)
+    splade_enabled: false                       # Use learned sparse SPLADE model instead of BM25
+    splade_model: "naver/splade-cocondenser-ensembledistil"  # SPLADE checkpoint
+
+# -----------------------------------------------------------------------------
+# Stage 3 — Query Understanding
+# -----------------------------------------------------------------------------
+query:
+  # Short / under-specified query expansion
+  expansion:
+    enabled: true                               # Toggle query expansion
+    method: "hyde"                              # Expansion method: hyde | query2doc | prf
+    hyde_model: "gpt-4-turbo"                   # LLM used to generate HyDE hypothetical answer
+    hyde_max_tokens: 256                        # Max length of hypothetical document
+    prf_top_k: 3                                # Pseudo-relevance feedback: top-k docs to expand from
+
+  # Ambiguous & multi-intent queries
+  decomposition:
+    enabled: true                               # Enable sub-question decomposition for complex queries
+    max_sub_questions: 4                        # Maximum number of sub-questions to generate
+    intent_classification: true                 # Classify intent before routing (factoid | analytical | etc.)
+    multi_query_k: 3                            # Number of parallel query rewrites for MultiQueryRetriever
+
+  # Conversational context carry-over
+  conversation:
+    enabled: true                               # Enable conversation-aware query reformulation
+    history_window: 6                           # Number of prior turns to include in context
+    condense_model: "gpt-4-turbo"               # LLM to rewrite follow-up into standalone query
+
+  # Entity & temporal reasoning
+  entity_recognition:
+    enabled: true                               # Run NER on every query to extract filter candidates
+    model: "en_core_web_trf"                    # spaCy model for NER
+    temporal_grounding: true                    # Extract date/time references and apply metadata filter
+    kg_augmentation: false                      # Augment with Neo4j knowledge graph (requires NEO4J_*)
+
+# -----------------------------------------------------------------------------
+# Stage 4 — Retrieval & Re-ranking
+# -----------------------------------------------------------------------------
+retrieval:
+  # Challenge 15: Low recall at top-k
+  top_k_initial: 20                             # k for initial ANN retrieval before reranking
+  top_k_final: 5                                # k to return to the generator after reranking
+  parent_child:
+    enabled: true                               # Retrieve child chunk but return its parent for context
+  sentence_window:
+    enabled: true                               # Expand retrieved sentence to surrounding window
+    window_size: 3                              # Number of sentences before/after to include
+  recursive_retrieval: false                    # Enable recursive (multi-hop) retrieval for complex chains
+
+  # Re-ranking quality
+  reranking:
+    enabled: true                               # Toggle cross-encoder re-ranking
+    model: "cohere"                             # Reranker: cohere | colbertv2 | bge | llm_pointwise
+    cohere_model: "rerank-english-v3.0"         # Cohere reranker model version
+    colbert_model: "colbert-ir/colbertv2.0"     # ColBERT checkpoint
+    bge_model: "BAAI/bge-reranker-large"        # BGE cross-encoder checkpoint
+    llm_rerank_model: "gpt-4-turbo"             # LLM for listwise reranking (most expensive)
+
+  # Lost-in-the-middle
+  context_ordering:
+    strategy: "position_aware"                  # Ordering: position_aware | score_desc | interleaved
+    # position_aware: best chunk first, worst in middle, second-best last
+    compress_before_llm: true                   # Run contextual compression before passing to LLM
+
+  # Context window overflow
+  context_management:
+    max_context_tokens: 8192                    # Hard cap on tokens sent to the generator
+    compression_model: "llm_lingua"             # Compression method: llm_lingua | extractive | refine
+    llm_lingua_ratio: 0.5                       # Target compression ratio for LLMLingua
+    overflow_strategy: "map_reduce"             # Strategy when overflow: map_reduce | refine | truncate
+
+# -----------------------------------------------------------------------------
+# Stage 5 — Generation & Faithfulness
+# -----------------------------------------------------------------------------
+generation:
+  # Hallucination & unfaithful generation
+  model: "gpt-4-turbo"                          # Primary generator LLM
+  temperature: 0.0                              # Temperature=0 for deterministic, grounded answers
+  max_tokens: 1024                              # Maximum tokens in the generated answer
+  grounded_prompting: true                      # Force model to cite chunk IDs in its response
+  faithfulness_check:
+    enabled: true                               # Run post-generation faithfulness check
+    method: "ragas"                             # Method: ragas | selfcheckgpt | nli_classifier
+    selfcheck_samples: 5                        # Number of stochastic samples for SelfCheckGPT
+
+  # Citation & source attribution
+  citations:
+    enabled: true                               # Include inline citations in generated answer
+    format: "inline"                            # Citation format: inline | footnote | endnote
+    map_span_to_chunk: true                     # Map each claim span back to its source chunk_id
+
+  # Conflicting retrieved chunks
+  conflict_handling:
+    detect_conflicts: true                      # Run explicit conflict-detection prompt on retrieved chunks
+    freshness_weight: 0.3                       # Weight given to chunk timestamp in scoring
+    present_both_on_conflict: true              # When conflict detected, present both versions with dates
+
+# -----------------------------------------------------------------------------
+# Stage 6 — Evaluation
+# -----------------------------------------------------------------------------
+evaluation:
+  # No ground-truth labels at scale
+  synthetic_qa:
+    enabled: true                               # Auto-generate QA pairs for offline eval
+    num_pairs: 500                              # Number of synthetic QA pairs to generate
+    generator_model: "gpt-4-turbo"             # Model to generate synthetic questions
+  llm_judge:
+    enabled: true                               # Use LLM-as-judge for automated eval
+    model: "gpt-4-turbo"                        # Judge model
+    criteria: ["faithfulness", "relevance", "coherence", "completeness"]
+
+  # Retrieval vs generation error isolation
+  pipeline_eval:
+    retrieval_metrics: ["recall@k", "ndcg", "mrr"]  # Retrieval-only metrics
+    generation_metrics: ["faithfulness", "answer_relevancy", "context_precision"]
+    tracing_backend: "arize_phoenix"            # Tracing: arize_phoenix | langsmith | helicone
+
+  # Distribution shift & query drift
+  drift_detection:
+    enabled: true                               # Enable online embedding drift monitoring
+    reference_window: 1000                      # Queries to build the reference distribution
+    drift_threshold: 0.15                       # KL-divergence threshold to trigger alert
+    alert_channel: "slack"                      # Alert delivery: slack | email | pagerduty
+
+# -----------------------------------------------------------------------------
+# Stage 7 — Production & Operations
 # -----------------------------------------------------------------------------
 operations:
+  # Latency under load
   performance:
     async_retrieval: true                       # Run retrieval pipeline asynchronously
     semantic_cache:
@@ -90,12 +274,14 @@ operations:
       ttl_seconds: 3600                         # Cache entry TTL in seconds
     two_stage_retrieval: true                   # Stage 1: fast ANN; Stage 2: slow but precise reranker
 
+  # Access control & data isolation
   access_control:
     enabled: true                               # Enable multi-tenant namespace isolation
     backend: "qdrant_namespaces"                # ACL backend: qdrant_namespaces | weaviate_rbac
     metadata_acl_field: "allowed_roles"         # Chunk metadata field storing allowed role list
     jwt_auth: true                              # Enforce JWT-based auth on every query request
 
+  # PII & sensitive data leakage
   pii:
     detect_at_ingestion: true                   # Scan and redact PII when chunk is first ingested
     detection_engine: "presidio"                # PII engine: presidio | aws_comprehend
@@ -109,13 +295,13 @@ operations:
     sensitivity_tagging: true                   # Tag chunk metadata with sensitivity level
     output_scanning: true                       # Also scan generated answers before returning to user
 
+  # Observability & tracing
   observability:
     tracing_enabled: true                       # Enable end-to-end span tracing
     trace_backends: ["langsmith", "arize_phoenix", "helicone"]  # Active trace sinks
     log_token_usage: true                       # Log prompt + completion token counts per request
     structured_logging: true                    # Use JSON-structured logs (for ELK/Splunk ingestion)
     log_chunk_ids: true                         # Include source chunk IDs in every log entry
-
 
 # -----------------------------------------------------------------------------
 # Logging

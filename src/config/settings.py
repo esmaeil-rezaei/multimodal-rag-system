@@ -22,6 +22,14 @@ class Secrets(BaseSettings):
     # LLM providers
     open_ai_key: str = Field(..., env="OPEN_AI_KEY")
 
+    # Vector stores
+    qdrant_api_key: Optional[str] = Field(None, env="QDRANT_API_KEY")
+    qdrant_url: str = Field("http://localhost:6333", env="QDRANT_URL")
+
+    # Databases
+    elasticsearch_url: str = Field("http://localhost:9200", env="ELASTICSEARCH_URL")
+    elasticsearch_api_key: Optional[str] = Field(None, env="ELASTICSEARCH_API_KEY")
+
     # Runtime
     app_env: str = Field("development", env="APP_ENV")
     log_level: str = Field("INFO", env="LOG_LEVEL")
@@ -60,6 +68,21 @@ class AppConfig():
         """Ingestion pipeline settings (parsing, tables, images, dedup, versioning)."""
         return self._data["ingestion"]
         
+    @property
+    def chunking(self) -> Dict[str, Any]:
+        """Chunking strategy settings."""
+        return self._data["chunking"]
+    
+    @property
+    def embeddings(self) -> Dict[str, Any]:
+        """Embedding model selection and multilingual settings."""
+        return self._data["embeddings"]
+
+    @property
+    def vector_store(self) -> Dict[str, Any]:
+        """Vector index backend, HNSW, IVF-PQ, and hybrid search settings."""
+        return self._data["vector_store"]
+    
     @property
     def operations(self) -> Dict[str, Any]:
         """Production ops: cache, ACL, PII, observability."""

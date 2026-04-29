@@ -1,3 +1,6 @@
+
+from __future__ import annotations
+
 import hashlib
 import re
 from datetime import datetime, timezone
@@ -6,8 +9,12 @@ from typing import Dict, List, Optional, Set
 
 from src.config.settings import get_config
 from src.ingestion.parser import DocumentParser, ParsedChunk
-from src.ingestion.consolidator import ChunkConsolidator
 from src.operations.ops_middleware import PIIGuard
+from src.ingestion.consolidator import ChunkConsolidator
+from src.ingestion.deduplicator import Deduplicator
+from src.indexing.embedder import EmbeddingRouter
+from src.indexing.vector_store import DenseVectorStore, SparseIndex
+from src.ingestion.chunker import TextChunker, ChunkNode
 from src.utils.logger import get_logger, set_correlation_id
 
 
@@ -25,14 +32,19 @@ class IngestionPipeline:
     """
     
     def __init__(self) -> None: 
-        self._cfg             = get_config()
-        self.kb_cfg           = self._cfg.knowledge_base
-        self._ingest_cfg      = self._cfg.ingestion
-        self._versioning_cfg  = self._ingest_cfg["versioning"]
+        self._cfg           = get_config()
+        self._kb_cfg        = self._cfg.knowledge_base
+        self._ingest_cfg    = self._cfg.ingestion
+        self._versioning_cfg = self._ingest_cfg["versioning"]
 
-        self._parser          = DocumentParser()
-        self._pii_gaurd       = PIIGuard()
-        self._consolidator    = ChunkConsolidator()
+        self._parser        = DocumentParser()
+        self._pii_guard     = PIIGuard()
+        self._consolidator  = ChunkConsolidator()               
+        self._deduplicator  = Deduplicator()
+        self._chunker       = TextChunker()
+        self._embedder      = EmbeddingRouter()
+        self._dense_store   = DenseVectorStore()
+        self._sparse_index  = SparseIndex()
 
         self._processed_hashes: Dict[str, str] = {}
 
@@ -46,12 +58,12 @@ class IngestionPipeline:
         """
 
         set_correlation_id()
-        root = Path(self.kb_cfg["root_dir"])
+        root = Path(self._kb_cfg["root_dir"])
         
         if not root.exists():
             raise FileNotFoundError(f"Knowledge base root not found: {root}")
 
-        supported_ext: Set[str] = set(self.kb_cfg["supported_extensions"])
+        supported_ext: Set[str] = set(self._kb_cfg["supported_extensions"])
         files = [
             f for f in root.rglob("*")
             if f.is_file() and f.suffix.lower() in supported_ext
@@ -65,8 +77,8 @@ class IngestionPipeline:
             try:
                 indexed, skipped = self._ingest_file(file_path, source_name, namespace)
                 stats["files_scanned"] += 1
-                stats["chunks_indexed"] += 1
-                stats["chunks_skipped"] += 1
+                stats["chunks_indexed"] += indexed
+                stats["chunks_skipped"] += skipped
             except Exception as exc:
                 logger.error(f"Failed to ingest {file_path}: {exc}", exc_info=True)
 
@@ -127,7 +139,7 @@ class IngestionPipeline:
         # ----- PII redaction + sensitivity tagging -------
         for chunk in raw_chunks:
             original_text = chunk.text
-            chunk.text = self._pii_gaurd.redact(chunk.text, context="ingestion")
+            chunk.text = self._pii_guard.redact(chunk.text, context="ingestion")
             chunk.metadata["sensitivity"] = (
                 "readacted" if chunk.text != original_text else "public"
             )
@@ -143,7 +155,34 @@ class IngestionPipeline:
             logger.warning(f"Consolidation produced no chunks for {file_path.name}")
             return 0, 0
 
+        # ----- Deduplication -------
+        unique_chunks = self._deduplicator.filter(consolidated)
+        skipped = len(consolidated) - len(unique_chunks)
 
+
+        # ----- Chunker -------
+        chunk_nodes: List[ChunkNode] = self._chunker.chunk(unique_chunks)
+
+
+        # ----- Embed + upsert -------
+        indexed = 0
+        pairs = self._embedder.embed_nodes(chunk_nodes)
+
+        for node, vector in pairs:
+            chunk = node.chunk
+            chunk.metadata["parent_id"]        = node.parent_id
+            chunk.metadata["hierarchy_level"]  = node.level
+            chunk.metadata["namespace"]        = namespace or "default"
+
+            self._dense_store.upsert(chunk, vector, namespace=namespace)
+            self._sparse_index.index_chunk(chunk)
+            indexed += 1
+
+        logger.info(
+            f"File ingested: {file_path.name} → "
+            f"{indexed} chunks indexed, {skipped} skipped"
+        )
+        return indexed, skipped
     
     # -------------------------------------------------------------------------
     # Helpers
