@@ -1,16 +1,8 @@
 
-# src/ingestion/deduplicator.py
-# =============================================================================
-# Duplicate & near-duplicate content detection.
-# Two-phase approach:
-#   Phase 1 — Exact dedup via SHA-256 hash lookup  (O(1) per chunk)
-#   Phase 2 — Fuzzy dedup via MinHash + Jaccard similarity  (O(n) per chunk)
-# =============================================================================
-
 from __future__ import annotations
 
 import hashlib                                  
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Set
 
 from datasketch import MinHash, MinHashLSH
 
@@ -23,9 +15,7 @@ logger = get_logger(__name__)
 
 class Deduplicator:
     """
-    Stateful deduplication engine.
-    Maintains an in-memory seen-hashes set and an LSH index across the lifetime
-    of a single ingestion run.  For production, these should be backed by Redis.
+    In-memory exact + fuzzy deduplication for ingestion runs.
     """
 
     def __init__(self) -> None:
@@ -39,33 +29,25 @@ class Deduplicator:
         self._exact_hashes: Set[str] = set()
 
         self._lsh = MinHashLSH(
-            threshold=self._threshold,              # Jaccard threshold for LSH buckets
-            num_perm=self._num_perm,                # Must match MinHash permutations
+            threshold=self._threshold,             
+            num_perm=self._num_perm,            
         )
-        self._lsh_registry: Dict[str, tuple[ParsedChunk, MinHash]] = {}  # Maps LSH key → ParsedChunk for lookup
+        self._lsh_registry: Dict[str, tuple[ParsedChunk, MinHash]] = {} 
 
-    # -------------------------------------------------------------------------
-    # Public API
-    # -------------------------------------------------------------------------
 
     def filter(self, chunks: List[ParsedChunk]) -> List[ParsedChunk]:
         """
-        Accept a batch of ParsedChunks and return the deduplicated subset.
-
-        Steps:
-          1. Exact hash dedup (fastest, zero false negatives for identical text).
-          2. MinHash fuzzy dedup (catches near-duplicates with minor edits).
-          3. Apply keep_strategy to choose canonical representative when conflicts arise.
+        Deduplicate a batch of chunks using exact and MinHash matching.
         """
         if not self._dedup_cfg["enabled"]:
             return chunks                         
 
-        unique: List[ParsedChunk] = []              # Result accumulator
-        duplicates_exact = 0                        # Counter for reporting
+        unique: List[ParsedChunk] = []             
+        duplicates_exact = 0                       
         duplicates_fuzzy = 0
 
         for chunk in chunks:
-            # ---- Phase 1: Exact duplicate check --------------------------------
+            
             norm_text = self._normalize(chunk.text)
             exact_hash = self._compute_exact_hash(norm_text)
             if exact_hash in self._exact_hashes:
@@ -73,14 +55,12 @@ class Deduplicator:
                 logger.debug(f"Exact duplicate skipped: {chunk.chunk_id}")
                 continue                            
 
-            # ---- Phase 2: Fuzzy / near-duplicate check -------------------------
             minhash = self._compute_minhash(norm_text)
             similar_keys: List[str] = self._lsh.query(minhash)
 
             if similar_keys:
                 winner = self._resolve_conflict(chunk, similar_keys)
                 if winner is not chunk:
-                    # The existing candidate is preferred — skip incoming chunk
                     duplicates_fuzzy += 1
                     logger.debug(
                         f"Near-duplicate skipped (jaccard ≥ {self._threshold}): "
@@ -88,14 +68,13 @@ class Deduplicator:
                     )
                     continue
 
-            # ---- Register as canonical -----------------------------------------
-            self._exact_hashes.add(exact_hash)     # Mark exact hash as seen
-            lsh_key = chunk.chunk_id or exact_hash  # Unique key for LSH registry
+            self._exact_hashes.add(exact_hash)    
+            lsh_key = chunk.chunk_id or exact_hash  
             try:
-                self._lsh.insert(lsh_key, minhash)  # Add to MinHash LSH index
+                self._lsh.insert(lsh_key, minhash)
             except ValueError:
-                pass                               # Key already exists — safe to ignore
-            self._lsh_registry[lsh_key] = (chunk, minhash)    # Store reference for conflict resolution
+                pass                          
+            self._lsh_registry[lsh_key] = (chunk, minhash)
             unique.append(chunk)                  
 
         logger.info(
@@ -104,70 +83,61 @@ class Deduplicator:
         )
         return unique
 
-    # -------------------------------------------------------------------------
-    # Internal helpers
-    # -------------------------------------------------------------------------
+
     @staticmethod
     def _normalize(text: str) -> str:
         return " ".join(text.lower().split())
     
     @staticmethod
     def _compute_exact_hash(text: str) -> str:
-        """Return the SHA-256 hex digest of a text string (Phase 1 dedup key)."""
+        """SHA-256 hash of normalized text."""
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     def _compute_minhash(self, text: str) -> MinHash:
         """
-        Build a MinHash signature from the n-gram shingles of a text string.
-        Character-level 3-grams are a robust choice for short text dedup.
+        MinHash signature using character 3-grams.
         """
         mh = MinHash(num_perm=self._num_perm)     
-        shingles = self._shingle(text, k=3)         # Extract character 3-grams as the feature set
+        shingles = self._shingle(text, k=3)
         for shingle in shingles:
-            mh.update(shingle.encode("utf-8"))      # Add each shingle to the MinHash sketch
+            mh.update(shingle.encode("utf-8"))  
         return mh
     
     @staticmethod
     def _shingle(text: str, k: int = 3) -> Set[str]:
         """
-        Extract all character k-grams (shingles) from a text string.
-        Using character-level rather than word-level shingles handles
-        minor edits and formatting differences more robustly.
+        Character k-grams for robust near-duplicate matching.
         """
         text = " ".join(text.lower().split())
-        return {text[i : i + k] for i in range(len(text) - k + 1)}  # Sliding window of size k
+        return {text[i : i + k] for i in range(len(text) - k + 1)}
 
     def _resolve_conflict(
         self, incoming: ParsedChunk, existing_keys: List[str]
     ) -> ParsedChunk:
         """
-        Given an incoming chunk and the keys of similar existing chunks,
-        return whichever ParsedChunk should be kept (the canonical version).
+        Select canonical chunk among near-duplicates.
         """
         existing_chunks = [
             self._lsh_registry[k]
             for k in existing_keys
-            if k in self._lsh_registry           # Defensive lookup
+            if k in self._lsh_registry       
         ]
         if not existing_chunks:
             return incoming                     
 
         strategy = self._keep_strategy
         if strategy == "newest":
-            # Keep the chunk with the latest ingestion timestamp
             all_candidates = existing_chunks + [incoming]
             return max(
                 all_candidates,
-                key=lambda c: c.ingestion_ts or "",  # Lexicographic ISO-8601 comparison
+                key=lambda c: c.ingestion_ts or "",
             )
         elif strategy == "oldest":
-            # Keep the earliest ingested chunk
             all_candidates = existing_chunks + [incoming]
             return min(
                 all_candidates,
                 key=lambda c: c.ingestion_ts or "9999",
             )
         else:
-            # "highest_quality": keep whichever has more text (proxy for information density)
             all_candidates = existing_chunks + [incoming]
             return max(all_candidates, key=lambda c: len(c.text))

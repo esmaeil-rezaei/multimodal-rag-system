@@ -5,7 +5,7 @@
       "name": "Debug Ingest (module mode)",
       "type": "python",
       "request": "launch",
-      "module": "scripts.ingest",
+      "module": "scripts.query",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": false

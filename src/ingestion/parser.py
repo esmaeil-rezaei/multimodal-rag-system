@@ -1,21 +1,9 @@
-# src/ingestion/parser.py
-# Strategy summary:
-#   1. PRIMARY SIGNAL  — unstructured.io classifies headings as Title elements.
-#      category_depth (populated by hi_res strategy) encodes heading level.
-#   2. FALLBACK SIGNAL — when category_depth is absent (scanned PDFs, fast
-#      strategy), we infer depth from bounding-box height relative to the
-#      tallest Title in the document (relative ranking, not absolute font size).
-#   3. CROSS-FILE RELATEDNESS is a retrieval concern, not a parsing concern.
-#      We emit a breadcrumb field so the retrieval layer can use semantic
-#      similarity across sections from different files without coupling parsers.
-# =============================================================================
 
 from __future__ import annotations
 
 import base64
 import hashlib
 import mimetypes
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -34,31 +22,17 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Data model
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ParsedChunk:
     """
-    One logical unit extracted from a source document.
-    Canonical data structure passed between all pipeline stages.
-
-    Metadata contract for the consolidator (all fields must be present
-    regardless of source file type):
-        category      — element type: Title, NarrativeText, Table, Image, …
-        element_id    — unstructured element ID for provenance tracking
-        section       — text of the nearest ancestor heading (leaf of stack)
-        section_depth — numeric depth of that heading (1 = top-level)
-        breadcrumb    — full path from root: "Introduction > Background"
-        page_number   — PDF page (int) or None for non-PDF formats
+    Metadata contract for the consolidator
     """
     text: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     chunk_id: Optional[str] = None
     source_file: Optional[str] = None
     source_name: Optional[str] = None
-    modality: str = "text"                  # text | table | image_caption
+    modality: str = "text"              
     language: Optional[str] = None
     doc_version: Optional[str] = None
     ingestion_ts: Optional[str] = None
@@ -67,29 +41,10 @@ class ParsedChunk:
         return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Heading-tracker state machine
-# ---------------------------------------------------------------------------
 class _HeadingTracker:
     """
-    Maintains a stack of (depth, heading_text) pairs and updates it as Title
-    elements are encountered.
-
-    This is the core mechanism that gives the consolidator section context for
-    PDFs, exactly mirroring what ATX-heading parsing does for Markdown.
-
-    Stack invariant: entries are in strictly increasing depth order.
-    Pushing a heading at depth D pops everything with depth >= D first,
-    so the stack always represents the current ancestor chain.
-
-    Example trace:
-        push(1, "Chapter 1")    → stack: [(1, "Chapter 1")]
-        push(2, "Background")   → stack: [(1, "Chapter 1"), (2, "Background")]
-        push(2, "Methods")      → stack: [(1, "Chapter 1"), (2, "Methods")]
-        push(1, "Chapter 2")    → stack: [(1, "Chapter 2")]
-
-    Breadcrumb for the above after the last push: "Chapter 2"
-    Section (leaf) for the above after the last push: "Chapter 2"
+    Maintains a heading stack for hierarchical section tracking.
+    Invariant: stack is ordered by increasing heading depth.
     """
 
     def __init__(self) -> None:
@@ -116,36 +71,26 @@ class _HeadingTracker:
         return " > ".join(title for _, title in self._stack)
 
 
-# ---------------------------------------------------------------------------
-# Font-size depth inference (fallback when category_depth is absent)
-# ---------------------------------------------------------------------------
-
 def _infer_depth_from_font_size(
     title_elements: List[Element],
     max_levels: int = 3,
 ) -> Dict[int, int]:
     """
-    Map element object ids → inferred heading depth when category_depth is
-    not populated (e.g. fast strategy or scanned PDFs without OCR metadata).
+    Infer heading depth from visual layout when metadata is missing.
 
-    Algorithm:
-        1. Extract the bounding-box height for every Title element.
-        2. Sort unique heights descending (taller text = higher-level heading).
-        3. Assign depth 1 to the tallest group, depth 2 to next, etc.
-        4. Cap at max_levels to avoid over-segmentation on noisy PDFs.
+    Heights of Title elements are used to approximate relative heading levels
+    within a document (not absolute font sizes).
 
-    This is relative-within-document, not absolute, so it degrades gracefully
-    even if font-size metadata is coarse or rounded.
-
-    Returns: {id(element): depth_int}
+    Returns:
+        {element_id: depth}
     """
+
     heights: Dict[int, float] = {}
     for el in title_elements:
         meta = getattr(el, "metadata", None)
         coords = getattr(meta, "coordinates", None)
         if coords is None:
             continue
-        # Unstructured coordinates: list of (x, y) corner tuples
         pts = getattr(coords, "points", None)
         if pts and len(pts) >= 2:
             ys = [p[1] for p in pts]
@@ -154,9 +99,8 @@ def _infer_depth_from_font_size(
     if not heights:
         return {}
 
-    # Cluster unique heights into at most max_levels buckets
     unique_sorted = sorted(set(heights.values()), reverse=True)
-    # Simple equal-width bucketing
+
     n_levels = min(len(unique_sorted), max_levels)
     if n_levels == 0:
         return {}
@@ -168,27 +112,17 @@ def _infer_depth_from_font_size(
     return depth_map
 
 
-# ---------------------------------------------------------------------------
-# Parser
-# ---------------------------------------------------------------------------
 class DocumentParser:
     """
-    Routes source files to the correct parsing strategy and returns a flat
-    list of ParsedChunk objects — one per logical document element.
-
-    Metadata contract: every chunk carries section/section_depth/breadcrumb
-    regardless of source format.  The consolidator is format-agnostic.
+    Routes files to the appropriate parser and returns normalized ParsedChunks.
+    Chunks include section metadata for consistent downstream consolidation.
     """
 
     def __init__(self) -> None:
         self._cfg = get_config()
         self._sec = get_secrets()
         self._ingest_cfg = self._cfg.ingestion
-        self._openai = openai.OpenAI(api_key=self._sec.open_ai_key)
-
-    # -------------------------------------------------------------------------
-    # Public entry point
-    # -------------------------------------------------------------------------
+        self._openai = openai.OpenAI(api_key=self._sec.openai_api_key)
 
     def parse_file(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         logger.info("Parsing file", extra={"file": str(file_path), "source": source_name})
@@ -210,22 +144,11 @@ class DocumentParser:
             logger.warning(f"Unsupported extension: {suffix} for {file_path}")
             return []
 
-    # ---- PDF ----
     
     def _parse_pdf(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         """
-        Parse PDF using unstructured.io + Camelot, emitting one chunk per
-        element with full section context metadata.
-
-        Section assignment strategy (two-pass):
-          Pass 1 — collect all Title elements and build a font-size depth
-                   inference map as a fallback for when category_depth is absent.
-          Pass 2 — walk elements in document order, updating a _HeadingTracker
-                   state machine on every Title.  Non-Title elements inherit the
-                   current tracker state as their section/breadcrumb.
-
-        This is strictly a formatting concern: we attach metadata.  The
-        consolidator decides how to group based on that metadata.
+        Parse PDF into chunked elements with hierarchical section metadata.
+        Section context is derived using metadata when available, otherwise layout heuristics.
         """
         parsing_cfg = self._ingest_cfg["parsing"]
 
@@ -237,18 +160,15 @@ class DocumentParser:
             extract_image_block_output_dir=parsing_cfg["image_output_dir"],
         )
 
-        # --- Pass 1: build fallback depth map from bounding-box heights ------
         title_elements = [el for el in elements if isinstance(el, Title)]
         fallback_depth_map = _infer_depth_from_font_size(title_elements)
 
-        # --- Pass 2: walk elements in order with heading tracker -------------
+        # walk elements in order with heading tracker
         tracker = _HeadingTracker()
         chunks: List[ParsedChunk] = []
 
         for element in elements:
             if isinstance(element, Title):
-                # Resolve depth: prefer unstructured's category_depth,
-                # fall back to font-size inference, then default to 1.
                 meta = getattr(element, "metadata", None)
                 depth = (
                     getattr(meta, "category_depth", None)
@@ -288,7 +208,6 @@ class DocumentParser:
 
         return chunks
 
-    # ---- Markdown ----
 
     def _parse_md(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         """
@@ -318,8 +237,6 @@ class DocumentParser:
 
         return chunks
 
-
-    # ---- Plain text ----
 
     def _parse_txt(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         """
@@ -355,18 +272,13 @@ class DocumentParser:
         return chunks
 
 
-    # ---- Table extraction ----
 
     def _extract_tables_camelot(
         self, file_path: Path, source_name: str
     ) -> List[ParsedChunk]:
         """
         Extract tables from a PDF using Camelot.
-        Called once per file (not per element).
-
-        Section metadata is intentionally left blank here and filled in by the
-        caller (_parse_pdf) using the heading tracker's last known state, or
-        by the consolidator via page-number proximity matching.
+        Returns raw table chunks without section metadata.
         """
         chunks: List[ParsedChunk] = []
         output_fmt = self._ingest_cfg["tables"]["output_format"]
@@ -406,7 +318,7 @@ class DocumentParser:
                     "columns": col_metadata,
                     "accuracy": table.accuracy,
                     "whitespace": table.whitespace,
-                    "section": "",                     # section/breadcrumb filled by _parse_pdf after this returns
+                    "section": "",                  
                     "section_depth": 0,
                     "breadcrumb": "",
                 },
@@ -417,15 +329,11 @@ class DocumentParser:
         return chunks
 
 
-    # ---- Image captioning ----
-
     def _caption_image(
         self, element: Image, file_path: Path, source_name: str
     ) -> Optional[ParsedChunk]:
         """
-        Caption an extracted image via GPT-4V.
-        Falls back gracefully when image_path is missing.
-        section/breadcrumb filled by caller after tracker update.
+        Generate a caption for an image using GPT-4V when image data is available.
         """
         image_path: Optional[str] = getattr(
             getattr(element, "metadata", None), "image_path", None
@@ -495,7 +403,6 @@ class DocumentParser:
         return chunk
 
 
-    # ---- Standalone image files ----
 
     def _parse_standalone_image(
         self, file_path: Path, source_name: str
@@ -546,8 +453,6 @@ class DocumentParser:
         return [chunk]
 
 
-    # ---- DOCX / HTML ----
-
     def _parse_docx(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         elements: List[Element] = partition(filename=str(file_path), strategy="fast")
         return self._walk_elements_with_tracker(elements, file_path, source_name)
@@ -563,10 +468,7 @@ class DocumentParser:
         source_name: str,
     ) -> List[ParsedChunk]:
         """
-        Generic heading-tracker walk for formats where we have unstructured
-        elements but no dedicated parser (DOCX, HTML).
-        Identical logic to _parse_pdf pass 2, but without font-size fallback
-        (these formats don't expose coordinate metadata via the fast strategy).
+        Apply heading-tracker logic to DOCX/HTML elements to assign section context.
         """
         tracker = _HeadingTracker()
         chunks: List[ParsedChunk] = []
@@ -586,10 +488,6 @@ class DocumentParser:
 
         return chunks
 
-
-    # -------------------------------------------------------------------------
-    # Helpers
-    # -------------------------------------------------------------------------
 
     def _element_to_chunk(
         self,
@@ -615,7 +513,7 @@ class DocumentParser:
                 "element_id": getattr(element, "id", None),
                 "page_number": getattr(meta, "page_number", None),
                 "coordinates": getattr(meta, "coordinates", None),
-                "section": "",  # section/breadcrumb filled by _attach_section_context
+                "section": "",  
                 "section_depth": 0,
                 "breadcrumb": "",
             },
@@ -645,15 +543,9 @@ class DocumentParser:
             return None
 
 
-# ---------------------------------------------------------------------------
-# Module-level encoding helper
-# ---------------------------------------------------------------------------
-
 def _read_with_encoding_fallback(file_path: Path, preferred: str) -> str:
     """
-    Read a text file trying encodings in order.
-    utf-8-sig handles Windows BOM; cp1252 handles Western European Windows files.
-    latin-1 never raises; final decode with errors="replace" is the safety net.
+    Read text file using fallback encodings for compatibility across sources.
     """
     for encoding in [preferred, "utf-8", "utf-8-sig", "cp1252", "latin-1"]:
         try:

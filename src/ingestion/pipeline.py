@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
 
 from src.config.settings import get_config
@@ -26,8 +26,7 @@ class IngestionPipeline:
     """
     End-to-end document ingestion pipeline.
 
-    Corrected stage order:
-      scan → parse → stamp → PII redact → fingerprint
+    scan → parse → stamp → PII redact → fingerprint
            → consolidate → dedup → chunk → embed → upsert
     """
     
@@ -53,7 +52,6 @@ class IngestionPipeline:
     def run(self, namespace: Optional[str] = None) -> Dict[str, int]:
         """
         Run a full ingestion pass over the knowledge base directory.
-
         Returns summary stats: files_scanned, chunks_indexed, chunks_skipped.
         """
 
@@ -87,9 +85,6 @@ class IngestionPipeline:
     
 
 
-    # ---------------------------------------------------------------
-    # Single-file ingestion
-    # ---------------------------------------------------------------
     def _ingest_file(
         self,
         file_path: Path,
@@ -110,7 +105,6 @@ class IngestionPipeline:
           8. embed+upsert
         """
 
-        # Delta check at file level
         if self._versioning_cfg["delta_ingestion"]:
             file_hash = self._hash_file(file_path)
             if self._processed_hashes.get(str(file_path)) == file_hash:
@@ -121,22 +115,19 @@ class IngestionPipeline:
         logger.info(f"Ingesting: {file_path.name} [{source_name}]")
 
 
-        # ----- Parse -------
         raw_chunks: List[ParsedChunk] = self._parser.parse_file(file_path, source_name)
         if not raw_chunks:
             logger.warning(f"No content extracted from {file_path.name}")
             return 0, 0
         
-        
-        # ----- Stamp timestamps -------
+
         ingestion_ts = datetime.now(timezone.utc).isoformat()
         doc_version  = self._extract_version(file_path)
         for chunk in raw_chunks:
             chunk.ingestion_ts = ingestion_ts
             chunk.doc_version  = doc_version
-
         
-        # ----- PII redaction + sensitivity tagging -------
+
         for chunk in raw_chunks:
             original_text = chunk.text
             chunk.text = self._pii_guard.redact(chunk.text, context="ingestion")
@@ -144,27 +135,19 @@ class IngestionPipeline:
                 "readacted" if chunk.text != original_text else "public"
             )
 
-        # ----- Fingerprint on clean text -------
         for chunk in raw_chunks:
             chunk.chunk_id = chunk.compute_fingerprint()
 
-
-        # ----- Consolidate -------
         consolidated = self._consolidator.consolidate(raw_chunks)
         if not consolidated:
             logger.warning(f"Consolidation produced no chunks for {file_path.name}")
             return 0, 0
 
-        # ----- Deduplication -------
         unique_chunks = self._deduplicator.filter(consolidated)
         skipped = len(consolidated) - len(unique_chunks)
 
-
-        # ----- Chunker -------
         chunk_nodes: List[ChunkNode] = self._chunker.chunk(unique_chunks)
 
-
-        # ----- Embed + upsert -------
         indexed = 0
         pairs = self._embedder.embed_nodes(chunk_nodes)
 
@@ -184,15 +167,11 @@ class IngestionPipeline:
         )
         return indexed, skipped
     
-    # -------------------------------------------------------------------------
-    # Helpers
-    # -------------------------------------------------------------------------
 
     @staticmethod
     def _hash_file(file_path: Path) -> str:
         """
         SHA-256 of file byte content.
-        Read in 64 KB blocks to handle large files without loading into memory.
         """
         sha = hashlib.sha256()
         with open(file_path, "rb") as fh:
@@ -206,7 +185,6 @@ class IngestionPipeline:
     def _extract_version(file_path: Path) -> Optional[str]:
         """
         Extract a version string from the file name.
-        Supports: "policy_v2.1.pdf", "2024-03-01_report.md"
         """
         name = file_path.stem
         version_match = re.search(r"v(\d+(?:\.\d+)+)", name, re.IGNORECASE)

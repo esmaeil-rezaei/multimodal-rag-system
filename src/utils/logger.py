@@ -55,7 +55,6 @@ _LEVEL_COLOURS = {
     "CRITICAL": "\033[35m",    # Magenta
 }
 
-# Formatter 1: Coloured output for terminal during development
 class ColouredTerminalFormatter(logging.Formatter):
     """
     Coloured, human-readable output for the terminal.
@@ -70,20 +69,18 @@ class ColouredTerminalFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         colour  = _LEVEL_COLOURS.get(record.levelname, "")
-        ts      = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")   # Timestamp
-        level   = f"{colour}{_BOLD}{record.levelname:<9}{_RESET}"            # Padded, coloured level
-        name    = f"{_DIM}{record.name}{_RESET}"                             # Dimmed logger name
+        ts      = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")    # Timestamp
+        level   = f"{colour}{_BOLD}{record.levelname:<9}{_RESET}"             # Padded, coloured level
+        name    = f"{_DIM}{record.name}{_RESET}"                              # Dimmed logger name
         message = record.getMessage()                                         # Log message
 
-        # Append exception traceback on a new line if present
+
         if record.exc_info:
             message += "\n" + self.formatException(record.exc_info)
 
         return f"{ts}  {level}  {name}  {message}"
 
 
-
-# Formatter 2: Plain text for log files, includes correlation ID for tracing
 class PlainFileFormatter(logging.Formatter):
     """
     Plain human-readable text for log files.  No ANSI codes (they produce
@@ -100,18 +97,16 @@ class PlainFileFormatter(logging.Formatter):
         level   = f"{record.levelname:<8}"                  # Left-padded to 8 chars for alignment
         name    = record.name                               # Logger name e.g. src.ingestion.pipeline
         message = record.getMessage()
-        corr    = get_correlation_id()[:8]                  # First 8 chars of correlation ID — enough to identify
+        corr    = get_correlation_id()[:8]                  
 
         line = f"[{ts}] [{level}] [{name}] {message}  |corr={corr}"
 
-        # Append exception traceback indented below the log line
         if record.exc_info:
             line += "\n" + self.formatException(record.exc_info)
 
         return line
     
 
-# Formater 3: JSON for structured logging and machine parsing (not implemented yet)
 class JsonFormatter(logging.Formatter):
     """
     Single-line JSON for production stdout.
@@ -138,7 +133,6 @@ class JsonFormatter(logging.Formatter):
     
 
 
-# Logger setup
 def get_logger(name: str) -> logging.Logger:
     """
     Return a named, fully configured logger.
@@ -167,9 +161,8 @@ def get_logger(name: str) -> logging.Logger:
 
     logger.setLevel(log_level)
 
-    # ====================
-    # Handler 1 — stdout
-    # ====================
+
+
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(log_level)
 
@@ -182,12 +175,6 @@ def get_logger(name: str) -> logging.Logger:
 
     logger.addHandler(stdout_handler)
 
-    # ===================================================================
-    # Handler 2 — daily rolling file: logs/app.log
-    # Appends all runs on the same calendar day into one file.
-    # Rotates at UTC midnight, keeps 30 days of history.
-    # Rotated files are named: app.log.2026-03-21, app.log.2026-03-20, …
-    # ===================================================================
     daily_handler = logging.handlers.TimedRotatingFileHandler(
         filename    = str(_DAILY_LOG_FILE),     # logs/app.log
         when        = "midnight",               # Rotate once per day
@@ -202,15 +189,9 @@ def get_logger(name: str) -> logging.Logger:
 
     logger.addHandler(daily_handler)
 
-    # ===================================================================
-    # Handler 3 — per-run file: logs/runs/YYYY-MM-DD_HH-MM-SS.log
-    # Created once when the process starts (_RUN_LOG_FILE is module-level).
-    # Never overwritten — each invocation gets its own timestamped file.
-    # Mode "a" (append) is safe even if two processes start in the same second.
-    # ===================================================================
     run_handler = logging.FileHandler(
         filename = str(_RUN_LOG_FILE),          # logs/runs/2026-03-22_14-05-31.log
-        mode     = "a",                         # Append — never truncate
+        mode     = "a",                        
         encoding = "utf-8",
     )
     run_handler.setLevel(log_level)
@@ -218,5 +199,5 @@ def get_logger(name: str) -> logging.Logger:
 
     logger.addHandler(run_handler)
 
-    logger.propagate = False                    # Prevent double-logging via root logger
+    logger.propagate = False                  
     return logger

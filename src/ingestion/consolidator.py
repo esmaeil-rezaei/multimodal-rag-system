@@ -1,3 +1,6 @@
+
+from __future__ import annotations
+
 import hashlib
 from collections import Counter
 from dataclasses import dataclass, field
@@ -9,16 +12,10 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Output data model
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ConsolidatedChunk:
     """
-    A section-level chunk produced by merging multiple ParsedChunks that share
-    the same parent heading.  Carries both a merged metadata view and the full
-    list of original per-element metadata for downstream traceability.
+    Consolidated section-level chunk with merged metadata.
     """
     text: str
     source_file: str
@@ -42,33 +39,20 @@ class ConsolidatedChunk:
         self.metadata["chunk_id"] = value
 
 
-# ---------------------------------------------------------------------------
-# Consolidator
-# ---------------------------------------------------------------------------
-
 class ChunkConsolidator:
     """
-    Groups the small ParsedChunks emitted by the parser into section-sized
-    ConsolidatedChunks, then passes them to the chunker.
-
-    Text assembly rules per element category:
-      Title         → markdown heading prefix (## heading text)
-      Table         → wrapped in [TABLE]…[/TABLE] sentinel so the chunker
-                      treats the whole table as an atomic unit
-      Image         → wrapped in [IMAGE_DESCRIPTION]…[/IMAGE_DESCRIPTION]
-      NarrativeText / ListItem / everything else → plain newline join
+    Merge parser-level chunks into section-level chunks.
     """
 
     def consolidate(self, parsed_chunks: List[ParsedChunk]) -> List[ConsolidatedChunk]:
         """
-        Group parsed_chunks by section, merge each group, return a list of
-        ConsolidatedChunks in document order.
+        Group parser chunks into consolidated section chunks.
         """
         if not parsed_chunks:
             return []
 
         groups: Dict[str, List[ParsedChunk]] = {}
-        group_order: List[str] = []             # Preserve document order
+        group_order: List[str] = []           
 
         for chunk in parsed_chunks:
             key = self._section_key(chunk)
@@ -80,7 +64,7 @@ class ChunkConsolidator:
         consolidated: List[ConsolidatedChunk] = []
         for key in group_order:
             merged = self._merge_group(groups[key])
-            if merged.text.strip():             # Drop empty groups
+            if merged.text.strip():           
                 consolidated.append(merged)
 
         logger.info(
@@ -88,36 +72,25 @@ class ChunkConsolidator:
         )
         return consolidated
 
-    # -------------------------------------------------------------------------
-    # Grouping key
-    # -------------------------------------------------------------------------
 
     @staticmethod
     def _section_key(chunk: ParsedChunk) -> str:
         """
-        The key used to group elements into the same consolidated chunk.
-        Priority order:
-          1. metadata["section"] — set by _parse_md's heading tracker or
-             the element_to_chunk helper
-          2. metadata["breadcrumb"] — if the parser attached a full path
-          3. source_file — fallback so elements from different files never merge
+        Build the grouping key for section consolidation.
         """
         section = (
             chunk.metadata.get("section")
             or chunk.metadata.get("breadcrumb")
             or ""
         )
-        # Include source_file in the key so two files with identically named
-        # sections don't accidentally merge into the same group
+
         return f"{chunk.source_file}::{section}"
 
 
-    # -------------------------------------------------------------------------
-    # Group merge
-    # -------------------------------------------------------------------------
-
     def _merge_group(self, chunks: List[ParsedChunk]) -> ConsolidatedChunk:
-        """Merge a list of same-section ParsedChunks into one ConsolidatedChunk."""
+        """
+        Merge same-section chunks into one consolidated chunk.
+        """
         text_parts: List[str] = []
         all_metadata: List[Dict[str, Any]] = [c.metadata for c in chunks]
 
@@ -142,64 +115,43 @@ class ChunkConsolidator:
             element_metadata=all_metadata,
         )
 
-    # -------------------------------------------------------------------------
-    # Text formatting per element category
-    # -------------------------------------------------------------------------
 
     @staticmethod
     def _format_element(text: str, category: str, depth: int) -> str:
         """
-        Format a single element's text according to its category so downstream
-        components (chunker, embedder) can handle it correctly.
+        Format chunk text based on element category.
         """
         if not text:
             return ""
 
         if category == "Title":
-            # Re-emit as a markdown heading so the chunker's _split_sections
-            # recognises it as a section boundary in hierarchical mode
+            # Recreate Markdown headings for hierarchical section splitting.
             hashes = "#" * max(1, min(depth, 6))
             return f"{hashes} {text}"
 
         elif category == "Table":
-            # Sentinel wrapping signals to the chunker: never split this block
             return f"[TABLE]\n{text}\n[/TABLE]"
 
         elif category == "Image":
-            # Sentinel wrapping keeps the VLM caption atomic and labelled
             return f"[IMAGE_DESCRIPTION]\n{text}\n[/IMAGE_DESCRIPTION]"
 
         elif category in {"ListItem", "ListItem.Bulleted", "ListItem.Numbered"}:
-            # Prefix with dash so merged list items stay readable as a list
             return f"- {text}" if not text.startswith("-") else text
 
         else:
-            # NarrativeText, FigureCaption, Header, Footer, Address, etc.
             return text
 
-
-    # -------------------------------------------------------------------------
-    # Metadata merge strategies
-    # -------------------------------------------------------------------------
 
     @staticmethod
     def _merge_metadata(all_meta: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Merge per-element metadata dicts into one section-level dict.
-
-        Rules:
-          Scalar fields  → first non-null wins
-          page_number    → page_start / page_end range (min / max)
-          categories     → union list  (for retrieval filtering)
-          element_ids    → ordered list (full provenance chain)
-          convenience flags → has_table, has_image, has_list
+        Merge element metadata into section-level metadata.
         """
         if not all_meta:
             return {}
 
         merged: Dict[str, Any] = {}
 
-        # Scalar: first non-null wins
         for key in ("section", "section_depth", "filename", "breadcrumb",
                     "front_matter", "suffix", "doc_version"):
             for m in all_meta:
@@ -208,14 +160,12 @@ class ChunkConsolidator:
                     merged[key] = val
                     break
 
-        # Page range
         pages = [m["page_number"] for m in all_meta
                  if isinstance(m.get("page_number"), int)]
         if pages:
             merged["page_start"] = min(pages)
             merged["page_end"] = max(pages)
 
-        # Union of all categories
         categories = list({m["category"] for m in all_meta if m.get("category")})
         merged["categories"] = categories
         merged["has_table"] = "Table" in categories
@@ -224,21 +174,20 @@ class ChunkConsolidator:
             c.startswith("ListItem") for c in categories
         )
 
-        # Full provenance: every element ID in order
         merged["element_ids"] = [
             m["element_id"] for m in all_meta if m.get("element_id")
         ]
         merged["element_count"] = len(all_meta)
 
         return merged
+    
 
-    # -------------------------------------------------------------------------
-    # Dominant language / modality helpers
-    # -------------------------------------------------------------------------
 
     @staticmethod
     def _dominant_language(chunks: List[ParsedChunk]) -> str:
-        """Return the majority language across all non-None language values."""
+        """
+        Return the majority language across all non-None language values.
+        """
         langs = [c.language for c in chunks if c.language]
         if not langs:
             return ""
@@ -247,10 +196,7 @@ class ChunkConsolidator:
     @staticmethod
     def _dominant_modality(chunks: List[ParsedChunk]) -> str:
         """
-        Determine the consolidated chunk's modality.
-        If the group contains only tables → table.
-        If only image captions → image_caption.
-        Any prose present → text (prose wins because it drives the embedding).
+        Return the dominant modality for a consolidated chunk.
         """
         modalities = {c.modality for c in chunks}
         if modalities == {"table"}:
