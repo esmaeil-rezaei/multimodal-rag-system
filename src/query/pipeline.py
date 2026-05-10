@@ -26,21 +26,6 @@ from src.utils.logger import get_logger, set_correlation_id
 
 logger = get_logger(__name__)
 
-
-def _log_ragas_scores(report) -> None:
-    """Print RAGAS evaluation scores clearly to the console."""
-    logger.info(
-        f"\n{'='*50}\n"
-        f"  RAGAS EVALUATION RESULTS\n"
-        f"  Faithfulness:      {report.generation.faithfulness:.3f}\n"
-        f"  Answer Relevancy:  {report.generation.answer_relevancy:.3f}\n"
-        f"  Context Precision: {report.retrieval.context_precision:.3f}\n"
-        f"  Context Recall:    {report.retrieval.context_recall:.3f}\n"
-        f"  Overall Score:     {report.overall_score:.3f}\n"
-        f"{'='*50}"
-    )
-
-
 class QueryPipeline:
     """
     Full RAG query pipeline.
@@ -157,7 +142,7 @@ class QueryPipeline:
 
         with TraceSpan("generation"):
             result = self._generator.generate(
-                query=processed_query.final_query(),
+                query=processed_query.original_query,
                 context_items=context_items,
             )
 
@@ -172,31 +157,26 @@ class QueryPipeline:
 
         try:
             context_texts = [item.chunk.text for item in context_items]
-            report = self._evaluator.evaluate_with_llm_judge(
+            report = self._evaluator.evaluate_online(
                 query=raw_query,
                 answer=result.answer,
                 context_texts=context_texts,
-                generation_result=result,
             )
-            _log_ragas_scores(report)
             logger.info(
-                "Online evaluation",
-                extra={
-                    "overall_score": report.overall_score,
-                    "ragas_scores":  report.ragas_scores,
-                },
+                "Online evaluation complete",
+                extra={"overall_score": report.overall_score, "scores": report.ragas_scores or report.custom_judge_scores},
             )
         except Exception as exc:
-            logger.warning(f"Online evaluation failed (non-fatal): {exc}")
-
+            logger.warning("Online evaluation failed (non-fatal): %s", exc)
+ 
         logger.info(
             "Query pipeline complete",
             extra={
-                "faithfulness":        result.faithfulness_score,
-                "citations":           len(result.citations),
-                "prompt_tokens":       result.prompt_tokens,
-                "completion_tokens":   result.completion_tokens,
-                "hyde_used":           hyde_vector is not None,
+                "faithfulness": result.faithfulness_score,
+                "citations": len(result.citations),
+                "prompt_tokens": result.prompt_tokens,
+                "completion_tokens": result.completion_tokens,
+                "hyde_used": hyde_vector is not None,
             },
         )
         return result

@@ -248,7 +248,7 @@ class Generator:
         excerpts = [
             f"[{item.chunk.source_name or 'src'} / {item.chunk.ingestion_ts or '?'}]: "
             f"{item.chunk.text[:300]}"
-            for item in context_items[:5]          
+            for item in context_items          
         ]
         excerpts_str = "\n\n".join(excerpts)
 

@@ -200,10 +200,11 @@ class QueryUnderstanding:
                         {
                             "role": "system",
                             "content": (
-                                "You are a document generation assistant. "
-                                "Write a short, factual passage (2-4 sentences) that would "
-                                "directly answer the following question. "
-                                "Return ONLY the passage."
+                                "Before generating, correct any spelling mistakes in the question and "
+                                "consider name variations and alternative spellings.\n"
+                                "Then write a plausible 2-3 sentence passage as if extracted from a source document "
+                                "that directly answers the question in its corrected and variant forms.\n"
+                                "Do not refuse. Return ONLY the passage."
                             ),
                         },
                         {"role": "user", "content": query},

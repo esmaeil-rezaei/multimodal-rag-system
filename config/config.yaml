@@ -1,6 +1,6 @@
 # Application Metadata
 app:
-  name: "AI Shopping Recommendation System"
+  name: "Multimodal RAG System"
   version: "1.0.0"
   description: >
     "AI Shopping Recommendation Assistant is a hybrid RAG-based system that uses LLMs
@@ -27,7 +27,7 @@ knowledge_base:
 # Data Ingestion & Preprocessing
 ingestion:
   parsing:
-    pdf_strategy: "hi_res"                      # parsing mode
+    pdf_strategy: "hi_res"                      # parsing mode: fast | hi_res | ocr_only
     ocr_languages: ["eng", "fra", "deu"]        # OCR languages
     extract_images: true                        # extract images from PDFs
     extract_tables: true                        # enable table extraction
@@ -35,8 +35,8 @@ ingestion:
 
   tables:
     extract_tables: true                        # table extraction toggle
-    backend: "camelot"                          # table parser backend
-    output_format: "markdown"                   # table output format
+    backend: "camelot"                          # table parser backend: camelot | pdfplumber | tatr
+    output_format: "markdown"                   # table output format: json | markdown
     handle_merged_cells: true                   # merged cell handling
     multi_page_tables: true                     # join split tables
     store_column_metadata: true                 # keep column info
@@ -51,10 +51,10 @@ ingestion:
   deduplication:
     enabled: true                               # dedup toggle
     exact_hash_algorithm: "sha256"              # exact match hash
-    fuzzy_method: "minhash"                     # fuzzy dedup method
+    fuzzy_method: "minhash"                     # fuzzy dedup method: minhash | simhash
     minhash_num_perm: 128                       # MinHash permutations
     jaccard_threshold: 0.85                     # similarity threshold
-    keep_strategy: "newest"                     # which duplicate to keep
+    keep_strategy: "newest"                     # which duplicate to keep: newest | oldest | highest_quality
 
   versioning:
     add_timestamp: true                         # add ingestion timestamp
@@ -64,7 +64,7 @@ ingestion:
 
 # Chunking Strategy
 chunking:
-  strategy: "semantic"                          # chunking mode
+  strategy: "semantic"                          # chunking mode: fixed | semantic | hierarchical
   chunk_size: 512                              # max tokens per chunk
   min_chunk_size: 50                           # minimum chunk size
   chunk_overlap: 64                            # overlap (fixed mode only)
@@ -74,7 +74,7 @@ chunking:
   window_size: 3                               # context window size
   override_chunk_size: 400                     # hierarchical override size
 
-  embedding_backend: "sentence_transformers"   # embedding backend
+  embedding_backend: "sentence_transformers"   # embedding backend: # translate_then_retrieve | retrieve_then_translate
   embedding_model: "BAAI/bge-large-en-v1.5"    # embedding model
 
 # Embedding Models
@@ -93,9 +93,9 @@ embeddings:
 
 # Vector Index
 vector_store:
-  backend: "qdrant"                             # vector DB
-  collection_name: "enterprise_rag"             # collection name
-  distance_metric: "cosine"                     # similarity metric
+  backend: "qdrant"                             # vector DB: qdrant | pinecone | weaviate
+  collection_name: "multimodal_rag"             # collection name
+  distance_metric: "cosine"                     # similarity metric: cosine | dot | euclidean
 
   hnsw:
     m: 16                                       # graph connectivity
@@ -109,9 +109,9 @@ vector_store:
 
   hybrid_search:
     enabled: true                               # hybrid search toggle
-    sparse_backend: "elasticsearch"             # BM25 backend
+    sparse_backend: "elasticsearch"             # BM25 backend: elasticsearch | opensearch
     sparse_index_name: "rag_sparse"             # index name
-    fusion_method: "rrf"                        # ranking fusion method
+    fusion_method: "rrf"                        # ranking fusion method: rrf (reciprocal rank fusion) | linear
     rrf_k: 60                                   # RRF constant
     splade_enabled: false                       # learned sparse model toggle
     splade_model: "naver/splade-cocondenser-ensembledistil"
@@ -120,7 +120,7 @@ vector_store:
 query:
   expansion:
     enabled: true                               # query expansion toggle
-    method: "hyde"                              # expansion method
+    method: "hyde"                              # expansion method: hyde | query2doc | prf
     hyde_model: "gpt-4-turbo"                   # generation model
     hyde_max_tokens: 256                        # max expansion length
     prf_top_k: 3                                # feedback docs
@@ -158,21 +158,21 @@ retrieval:
 
   reranking:
     enabled: true                               # reranking toggle
-    model: "cohere"                             # reranker backend
+    model: "cohere"                             # reranker backend: cohere | colbertv2 | bge | llm_pointwise
     cohere_model: "rerank-english-v3.0"         # Cohere model
     colbert_model: "colbert-ir/colbertv2.0"     # ColBERT model
     bge_model: "BAAI/bge-reranker-large"        # BGE reranker
     llm_rerank_model: "gpt-4-turbo"             # LLM reranker
 
   context_ordering:
-    strategy: "position_aware"                  # ordering strategy
+    strategy: "position_aware"                  # ordering strategy: position_aware | score_desc | interleaved
     compress_before_llm: true                   # pre-LLM compression
 
   context_management:
     max_context_tokens: 8192                    # token limit
-    compression_model: "llm_lingua"             # compression method
+    compression_model: "llm_lingua"             # compression method: llm_lingua | extractive | refine
     llm_lingua_ratio: 0.5                       # compression ratio
-    overflow_strategy: "map_reduce"             # overflow handling
+    overflow_strategy: "map_reduce"             # overflow handling: map_reduce | refine | truncate
 
 # Generation & Faithfulness
 generation:
@@ -183,12 +183,12 @@ generation:
 
   faithfulness_check:
     enabled: true                               # validation step
-    method: "ragas"                             # evaluation method
+    method: "ragas"                             # evaluation method: ragas | selfcheckgpt | nli_classifier
     selfcheck_samples: 5                        # sampling count
 
   citations:
     enabled: true                               # citation output
-    format: "inline"                            # citation style
+    format: "inline"                            # citation style: inline | footnote | endnote
     map_span_to_chunk: true                     # trace to source chunks
 
   conflict_handling:
@@ -205,19 +205,20 @@ evaluation:
 
   llm_judge:
     enabled: true                               # LLM evaluation
+    method: "ragas"                             # ragas" | "custom" | "both"
     model: "gpt-4-turbo"                        # judge model
     criteria: ["faithfulness", "relevance", "coherence", "completeness"]
 
   pipeline_eval:
     retrieval_metrics: ["recall@k", "ndcg", "mrr"]  # retrieval metrics
     generation_metrics: ["faithfulness", "answer_relevancy", "context_precision"]
-    tracing_backend: "arize_phoenix"                # tracing system
+    tracing_backend: "arize_phoenix"                # tracing system: arize_phoenix | langsmith | helicone
 
   drift_detection:
     enabled: true                               # drift monitoring
     reference_window: 1000                      # baseline window
     drift_threshold: 0.15                       # alert threshold
-    alert_channel: "slack"                      # alert destination
+    alert_channel: "slack"                      # alert destination: slack | email | pagerduty
 
 # Production & Operations
 operations:
@@ -226,7 +227,7 @@ operations:
 
     semantic_cache:
       enabled: true                             # semantic caching
-      backend: "redis"                          # cache backend
+      backend: "redis"                          # cache backend: redis | in_memory
       similarity_threshold: 0.95                # cache match threshold
       ttl_seconds: 3600                         # cache expiration
 
@@ -234,13 +235,13 @@ operations:
 
   access_control:
     enabled: true                               # multi-tenant isolation
-    backend: "qdrant_namespaces"                # ACL system
+    backend: "qdrant_namespaces"                # ACL system: qdrant_namespaces | weaviate_rbac
     metadata_acl_field: "allowed_roles"         # role field
     jwt_auth: true                              # authentication enabled
 
   pii:
     detect_at_ingestion: true                   # PII detection on ingest
-    detection_engine: "presidio"                # PII engine
+    detection_engine: "presidio"                # PII engine: presidio | aws_comprehend
     entities_to_redact:
       - "PERSON"
       - "EMAIL_ADDRESS"
@@ -261,6 +262,6 @@ operations:
 # Logging
 logging:
   format: "json"                                # log format
-  rotation: "daily"                             # rotation policy
+  rotation: "daily"                             # rotation policy: daily | hourly | size
   retention_days: 30                            # retention period
   log_dir: "logs"                               # log directory
