@@ -37,7 +37,7 @@ class IngestionPipeline:
         self._versioning_cfg = self._ingest_cfg["versioning"]
 
         self._parser        = DocumentParser()
-        # self._pii_guard     = PIIGuard()
+        self._pii_guard     = PIIGuard()
         self._consolidator  = ChunkConsolidator()               
         self._deduplicator  = Deduplicator()
         self._chunker       = TextChunker()
@@ -128,12 +128,12 @@ class IngestionPipeline:
             chunk.doc_version  = doc_version
         
 
-        # for chunk in raw_chunks:
-        #     original_text = chunk.text
-        #     chunk.text = self._pii_guard.redact(chunk.text, context="ingestion")
-        #     chunk.metadata["sensitivity"] = (
-        #         "readacted" if chunk.text != original_text else "public"
-        #     )
+        for chunk in raw_chunks:
+            original_text = chunk.text
+            chunk.text = self._pii_guard.redact(chunk.text, context="ingestion")
+            chunk.metadata["sensitivity"] = (
+                "readacted" if chunk.text != original_text else "public"
+            )
 
         for chunk in raw_chunks:
             chunk.chunk_id = chunk.compute_fingerprint()

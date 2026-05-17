@@ -142,6 +142,23 @@ query:
     temporal_grounding: true                    # time-aware queries
     kg_augmentation: false                      # KG integration disabled
 
+  intent_routing:
+    enabled: true
+    model: "gpt-4o"
+    min_confidence_to_skip: 0.80
+
+  agents:
+    orchestrator_model: "gpt-4o"
+    worker_model: "gpt-4o"
+    max_turns: 15
+
+  guardrails:
+    max_input_tokens: 1000
+    min_faithfulness_score: 0.40
+    min_answer_tokens: 20
+    max_answer_tokens: 8000
+    
+
 # Retrieval & Re-ranking
 retrieval:
   top_k_initial: 20                             # initial retrieval size
@@ -240,7 +257,8 @@ operations:
     jwt_auth: true                              # authentication enabled
 
   pii:
-    detect_at_ingestion: true                   # PII detection on ingest
+    detect_at_ingestion: false                  # PII detection on ingest
+    pii_block_on_input: false
     detection_engine: "presidio"                # PII engine: presidio | aws_comprehend
     entities_to_redact:
       - "PERSON"

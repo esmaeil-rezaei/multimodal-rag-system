@@ -1,0 +1,11 @@
+Supplier ID,Supplier Name,Country,Components Supplied,Rating,Certifications,Partnership Since,Quality Score,On-Time Delivery (%),Payment Terms
+SUP-001,KoreComp Electronics,South Korea,Compressors; Inverter Boards,A,ISO 9001:2015,2016-01-10,4.8,94.2,Net 60
+SUP-002,ThermoTech Components,Germany,Heat Exchangers; Evaporator Coils,A,ISO 9001; ISO 14001,2014-06-22,4.9,97.1,Net 45
+SUP-003,PolySeal Industries,Poland,Door Gaskets; Rubber Seals,B,ISO 9001:2015,2018-03-15,4.2,91.8,Net 30
+SUP-004,SteelForm Manufacturing,Taiwan,Cabinet Shells; Panels,A,ISO 9001; IATF 16949,2015-09-08,4.6,95.4,Net 60
+SUP-005,ChipLogic Semiconductor,Japan,Control Boards; Display Units,A+,ISO 9001; AEC-Q100,2013-11-30,4.9,98.2,Net 45
+SUP-006,MotorDrive Systems,China,Motors; Pumps; Fans,B,ISO 9001:2015,2019-07-19,4.1,89.6,Net 30
+SUP-007,GlassCraft Industries,Czech Republic,Tempered Glass Panels,A,ISO 9001; EN 12150,2017-02-28,4.5,93.7,Net 45
+SUP-008,FoamTec Insulation,Mexico,Polyurethane Foam Insulation,B,ISO 9001:2015,2020-05-14,4.0,88.9,Net 30
+SUP-009,ConnectPro Wiring,Vietnam,Wiring Harnesses; Cables,B,ISO 9001:2015,2021-01-25,3.9,87.4,Net 30
+SUP-010,FilterMaster Industries,India,Air Filters; Water Filters,A,ISO 9001; NSF/ANSI 42,2018-08-11,4.4,92.1,Net 45

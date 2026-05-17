@@ -435,4 +435,4 @@ class Retriever:
         """
         import re
         sentences = re.split(r"(?<=[.!?])\s+", text)  
-        return " ".join(sentences[:max_sentences])    
+        return " ".join(sentences[:max_sentences]) 

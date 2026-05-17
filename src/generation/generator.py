@@ -50,13 +50,6 @@ class Generator:
     ) -> GenerationResult:
         """
         Generate a grounded answer from the query and retrieved context.
-
-        Args:
-            query:         The final user query (standalone, reformulated).
-            context_items: Retrieved and reranked context chunks.
-
-        Returns:
-            GenerationResult with the answer, citations, and quality scores.
         """
 
         has_conflict, conflict_note = self._detect_conflicts(context_items)
@@ -109,77 +102,6 @@ class Generator:
             },
         )
         return result
-
-    def generate_stream(
-        self,
-        query: str,
-        context_items: List[ContextItem],
-    ) -> Iterator[Union[str, "GenerationResult"]]:
-        """
-        Streaming variant of generate(). Yields str token chunks as they arrive
-        so callers can display output progressively, then yields the final
-        GenerationResult as the last item once post-processing is complete.
-        """
-        has_conflict, conflict_note = self._detect_conflicts(context_items)
-        system_prompt = self._build_system_prompt()
-        user_prompt = self._build_user_prompt(query, context_items, conflict_note)
-        model = self._gen_cfg["model"]
-
-        stream = self._openai.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=self._gen_cfg["temperature"],
-            max_tokens=self._gen_cfg["max_tokens"],
-            stream=True,
-            stream_options={"include_usage": True},
-        )
-
-        accumulated: List[str] = []
-        usage = None
-        for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                delta = chunk.choices[0].delta.content
-                accumulated.append(delta)
-                yield delta
-            if getattr(chunk, "usage", None):
-                usage = chunk.usage
-
-        answer_raw = "".join(accumulated)
-        answer_clean, citations = self._extract_citations(answer_raw, context_items)
-
-        faithfulness_score: Optional[float] = None
-        if self._gen_cfg["faithfulness_check"]["enabled"]:
-            faithfulness_score = self._check_faithfulness(
-                query=query,
-                answer=answer_clean,
-                context_items=context_items,
-            )
-
-        result = GenerationResult(
-            answer=answer_clean,
-            citations=citations,
-            sources=list({item.chunk.source_file for item in context_items if item.chunk.source_file}),
-            faithfulness_score=faithfulness_score,
-            has_conflict=has_conflict,
-            conflict_resolution=conflict_note,
-            model_used=model,
-            prompt_tokens=usage.prompt_tokens if usage else 0,
-            completion_tokens=usage.completion_tokens if usage else 0,
-        )
-
-        logger.info(
-            "Generation complete",
-            extra={
-                "faithfulness": faithfulness_score,
-                "citations": len(citations),
-                "has_conflict": has_conflict,
-                "prompt_tokens": result.prompt_tokens,
-            },
-        )
-        yield result
 
 
 

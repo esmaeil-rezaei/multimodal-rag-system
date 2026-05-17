@@ -168,6 +168,7 @@ class PIIGuard:
         cfg = get_config()
         self._pii_cfg = cfg.operations["pii"]
         self._enabled_scan = self._pii_cfg["detect_at_ingestion"]
+        self._enabled_input = self._pii_cfg["pii_block_on_input"]
         self._output_scan = self._pii_cfg["output_scanning"]
         self._entities = self._pii_cfg["entities_to_redact"]       
 
@@ -184,7 +185,9 @@ class PIIGuard:
         if context == "ingestion" and not self._enabled_scan:
             return text                             
         if context == "output" and not self._output_scan:
-            return text                          
+            return text      
+        if context == "query" and not self._enabled_input:
+            return text                     
 
         try:
             

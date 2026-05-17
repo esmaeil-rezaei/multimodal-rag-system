@@ -29,7 +29,6 @@ class ProcessedQuery:
     sub_questions: List[str] = field(default_factory=list)  
     metadata_filters: Dict[str, Any] = field(default_factory=dict)  
     hypothetical_doc: Optional[str] = None          
-    intent: Optional[str] = None                    
     language: Optional[str] = None          
 
     def final_query(self) -> str:
@@ -128,11 +127,6 @@ class QueryUnderstanding:
     ) -> str:
         """
         Turns a follow-up question into a standalone query by using chat history.
-
-        Example:
-            History: "Tell me about GDPR"
-            Follow-up: "What are the penalties?"
-            Output: "What are the penalties under GDPR?"
         """
 
         window = self._q_cfg["conversation"]["history_window"]   
@@ -304,10 +298,6 @@ class QueryUnderstanding:
         """
         Run NER on the query to extract named entities and temporal references.
         These become metadata filters applied during vector store search.
-
-        Example:
-          "What did Apple announce in Q3 2023?" →
-          {"entity_ORG": "Apple", "date_range": {"gte": "2023-07-01", "lte": "2023-09-30"}}
         """
         filters: Dict[str, Any] = {}
 
