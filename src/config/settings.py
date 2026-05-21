@@ -86,6 +86,10 @@ class AppConfig:
     @property
     def operations(self) -> Dict[str, Any]:
         return self._data["operations"]
+    
+    @property
+    def log(self) -> Dict[str, Any]:
+        return self._data["log"]
 
     def get(self, key: str, default: Optional[Any] = None) -> Any:
         """Dot-path lookup (e.g. 'ingestion.versioning.ttl_days')."""

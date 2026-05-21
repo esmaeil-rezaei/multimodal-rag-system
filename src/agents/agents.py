@@ -112,7 +112,7 @@ FollowUpAgent: Agent[RAGRunContext] = Agent(
     ),
     instructions=(
         "You are a contextual refinement assistant.\n\n"
-        "Your PRIMARY goal is to answer from conversation history WITHOUT retrieval.\n\n"
+        "Your PRIMARY goal is to answer from conversation history get_conversation_history WITHOUT retrieval.\n\n"
         "STEP 1 — Check conversation history first (MANDATORY).\n"
         "- Read the <conversation_history> carefully.\n"
         "- If the answer is already present in the history, answer directly.\n"
@@ -135,7 +135,7 @@ FollowUpAgent: Agent[RAGRunContext] = Agent(
     handoffs=[
         handoff(RetrievalAgent),
     ],
-    tools=[get_conversation_history],
+    tools=[get_conversation_history, generate_answer],
     model=_worker_model,
     model_settings=ModelSettings(temperature=0.0),
     output_type=GenerationOutput,
@@ -154,6 +154,8 @@ OrchestratorAgent: Agent[RAGRunContext] = Agent(
         "Your ONLY responsibility is to select the correct agent.\n"
         "You must NEVER answer the user's question directly.\n\n"
         "Routing Rules:\n\n"
+        "Based on the content and intent of the rewritten query, route to the "
+        "appropriate agent:\n\n"
         "1. ConversationalAgent\n"
         "- Greetings (hi, hello, hey)\n"
         "- Pure small talk with no information need (how are you, I see, great)\n"
@@ -167,8 +169,10 @@ OrchestratorAgent: Agent[RAGRunContext] = Agent(
         "- Fact-based or knowledge-intensive requests\n\n"
         "3. FollowUpAgent\n"
         "- Follow-up questions referencing a previous answer\n"
-        "- Requests to simplify, expand, or clarify a previous answer\n"
-        "- Short fragments that only make sense in context of prior turns\n\n"
+        "- 'you just answered' — this is ALWAYS a FollowUpAgent query\n"
+        "- 'I meant...', 'what about the...', 'the methods that were combined'\n"
+        "- Any message that presupposes a prior exchange took place\n"
+        "- Requests to clarify or expand on a previous response\n"
         "CRITICAL RULES:\n"
         "- 'Do you know [name]?' is ALWAYS a RetrievalAgent query.\n"
         "- Any message containing a proper noun (name, place, company) "
@@ -177,6 +181,7 @@ OrchestratorAgent: Agent[RAGRunContext] = Agent(
         "always prefer RetrievalAgent.\n"
         "- Always hand off immediately. Never answer directly."
     ),
+    tools=[get_conversation_history],
     handoffs=[
         handoff(ConversationalAgent),
         handoff(RetrievalAgent),

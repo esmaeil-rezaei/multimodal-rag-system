@@ -30,7 +30,8 @@ class ProcessedQuery:
     metadata_filters: Dict[str, Any] = field(default_factory=dict)  
     hypothetical_doc: Optional[str] = None          
     language: Optional[str] = None          
-
+    intent: str = "factoid"
+    query_routing_intent: str = "retrieval"
     def final_query(self) -> str:
         """Return the best query string to use for retrieval."""
         return self.expanded_query or self.standalone_query or self.original_query
@@ -65,7 +66,8 @@ class QueryUnderstanding:
     def process(
         self,
         query: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
+        raw_query: str,
+        conversation_history: List[Dict[str, str]],
     ) -> ProcessedQuery:
         """
         Runs the full query understanding pipeline.
@@ -81,17 +83,18 @@ class QueryUnderstanding:
         if not query or not query.strip():
             raise ValueError("query must be a non-empty string")
 
-        pq = ProcessedQuery(original_query=query)
 
-
-        if self._q_cfg["conversation"]["enabled"] and conversation_history:
-            pq.standalone_query = self._condense_with_history(query, conversation_history)
-        else:
-            pq.standalone_query = query            
+        pq = ProcessedQuery(
+            original_query=raw_query,
+            standalone_query=query,
+            )
 
         working_query = pq.standalone_query        
 
         pq.intent = self._classify_intent(working_query)
+        pq.query_routing_intent = self._classify_routing_intent(
+            working_query, ctx_history=conversation_history or []
+        )
 
         if self._q_cfg["expansion"]["enabled"]:
             pq.expanded_query, pq.hypothetical_doc = self._expand_query(working_query)
@@ -122,7 +125,7 @@ class QueryUnderstanding:
         return pq
 
 
-    def _condense_with_history(
+    def condense_with_history(
         self, query: str, history: List[Dict[str, str]]
     ) -> str:
         """
@@ -254,6 +257,60 @@ class QueryUnderstanding:
         else:
             return "factoid"                 
         
+
+    def _classify_routing_intent(
+        self,
+        query: str,
+        ctx_history: List[Dict[str, str]],
+    ) -> str:
+        """
+        Classify whether a query should be routed to:
+          - "conversational" : pure small talk / acknowledgements, no info need
+          - "followup"       : references or builds on a prior turn
+          - "retrieval"      : needs external knowledge lookup
+
+        This is intentionally keyword-first and fast — no LLM call.
+        The OrchestratorAgent makes the final routing decision; this gives
+        the SemanticCache an early signal to skip the cache on conversational turns.
+        """
+        q = query.strip().lower()
+
+        CONVERSATIONAL_EXACT = {
+            "hi", "hello", "hey", "ok", "okay", "thanks", "thank you",
+            "cool", "great", "nice", "sure", "interesting", "got it",
+            "i see", "makes sense", "sounds good", "no problem",
+        }
+        CONVERSATIONAL_PREFIXES = (
+            "how are you", "what's up", "who are you", "are you an ai",
+        )
+        if q in CONVERSATIONAL_EXACT:
+            return "conversational"
+        if any(q.startswith(p) for p in CONVERSATIONAL_PREFIXES):
+            return "conversational"
+
+        if len(q.split()) <= 4 and not any(
+            kw in q for kw in ["what", "who", "why", "how", "when", "where", "which", "is", "are", "does", "do"]
+        ):
+            return "conversational"
+
+        FOLLOWUP_PHRASES = (
+            "you just", "you said", "you mentioned", "i meant", "what about",
+            "tell me more", "expand on", "elaborate", "clarify", "explain more",
+            "what do you mean", "can you explain", "more detail", "in more detail",
+            "the one you", "that algorithm", "this algorithm", "the algo",
+            "those methods", "these methods", "the methods", "the components",
+            "that you", "this approach", "the approach",
+        )
+        if any(phrase in q for phrase in FOLLOWUP_PHRASES):
+            return "followup"
+
+        PRONOUNS = {"it", "its", "they", "their", "this", "that", "these", "those", "them"}
+        if ctx_history:
+            tokens = set(q.split())
+            if tokens & PRONOUNS and len(q.split()) <= 10:
+                return "followup"
+
+        return "retrieval"
 
     def _decompose_query(self, query: str) -> List[str]:
         """

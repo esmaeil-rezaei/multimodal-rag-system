@@ -3,7 +3,7 @@ app:
   name: "Multimodal RAG System"
   version: "1.0.0"
   description: >
-    "AI Shopping Recommendation Assistant is a hybrid RAG-based system that uses LLMs
+    "Multimodal AI Assistant is a hybrid RAG-based system that uses LLMs
     and semantic search to answer user queries and recommend products. It combines
     intent understanding, vector search, and filtering to return contextual responses
     with product cards."
@@ -278,8 +278,11 @@ operations:
     log_chunk_ids: true                         # include source IDs
 
 # Logging
-logging:
+log:
   format: "json"                                # log format
   rotation: "daily"                             # rotation policy: daily | hourly | size
   retention_days: 30                            # retention period
   log_dir: "logs"                               # log directory
+  unknown_query_dir: "logs/feedback/unknown_queries"     # log unanswerable queries
+  liked_response_dir: "logs/feedback/liked_responses"     # log liked responses
+  disliked_response_dir: "logs/feedback/disliked_responses" # log disliked responses

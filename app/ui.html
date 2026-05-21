@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RAG · Knowledge Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #f6f7fb;
+  --surface:     #ffffff;
+  --surface2:    #f1f3f7;
+  --surface3:    #e8ebf2;
+
+  --border:      rgba(0,0,0,0.06);
+  --border2:     rgba(0,0,0,0.10);
+
+  --text:        #111827;
+  --text-2:      #4b5563;
+  --text-3:      #9ca3af;
+
+  --accent:      #19c37d;
+  --accent-dim:  rgba(25,195,125,0.12);
+  --accent-glow: rgba(25,195,125,0.18);
+
+  --user-bg:     #eef2f7;
+
+  --red:         #ef4444;
+  --red-dim:     rgba(239,68,68,0.12);
+
+  --amber:       #f59e0b;
+  --amber-dim:   rgba(245,158,11,0.12);
+
+  --blue:        #3b82f6;
+  --blue-dim:    rgba(59,130,246,0.12);
+
+  --radius:      14px;
+  --radius-sm:   8px;
+  --sidebar-w:   260px;
+
+  --font:        'Sora', sans-serif;
+  --mono:        'JetBrains Mono', monospace;
+}
+
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+
+aside {
+  width: var(--sidebar-w);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  padding: 20px 16px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+
+.logo-icon {
+  width: 32px; height: 32px;
+  background: var(--accent);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+.logo-icon svg { color: #000; }
+
+.logo-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.logo-text span {
+  font-weight: 300;
+  color: var(--text-2);
+}
+
+.btn-new-chat {
+  margin: 12px 16px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  width: calc(100% - 32px);
+}
+.btn-new-chat:hover { background: var(--surface3); color: var(--text); }
+
+.sidebar-section-label {
+  padding: 18px 16px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+#history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+}
+
+#history-list::-webkit-scrollbar { width: 4px; }
+#history-list::-webkit-scrollbar-track { background: transparent; }
+#history-list::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 4px; }
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.4;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.history-item:hover { background: var(--surface2); color: var(--text); }
+.history-item svg { flex-shrink: 0; opacity: 0.5; }
+
+.sidebar-footer {
+  border-top: 1px solid var(--border);
+  padding: 12px 16px;
+}
+
+.session-info {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  box-shadow: 0 0 6px var(--accent);
+}
+
+/* ── Main ────────────────────────────────────────────────────────────── */
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── Messages area ───────────────────────────────────────────────────── */
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+  scroll-behavior: smooth;
+}
+
+#messages::-webkit-scrollbar { width: 5px; }
+#messages::-webkit-scrollbar-track { background: transparent; }
+#messages::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 4px; }
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+#empty-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.empty-icon {
+  width: 56px; height: 56px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-glow);
+  border-radius: 16px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 20px;
+}
+
+.empty-title {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.03em;
+  margin-bottom: 8px;
+}
+
+.empty-sub {
+  font-size: 14px;
+  color: var(--text-2);
+  font-weight: 300;
+  max-width: 380px;
+  line-height: 1.6;
+  margin-bottom: 32px;
+}
+
+.starter-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+  max-width: 520px;
+}
+
+.starter-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.starter-card:hover { background: var(--surface2); border-color: var(--border2); }
+
+.starter-card-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+.starter-card-sub {
+  font-size: 12px;
+  color: var(--text-2);
+  font-weight: 300;
+}
+
+/* ── Message rows ────────────────────────────────────────────────────── */
+.msg-row {
+  padding: 24px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.msg-row + .msg-row {
+  border-top: 1px solid var(--border);
+}
+
+.msg-inner {
+  width: 100%;
+  max-width: 740px;
+  margin: 0 auto;
+  padding: 0 32px;
+  display: flex;
+  gap: 16px;
+}
+
+/* user message */
+.msg-row.user .msg-inner { justify-content: flex-end; }
+
+.msg-row.user .msg-bubble {
+  background: var(--user-bg);
+  border: 1px solid var(--border2);
+  border-radius: 18px 18px 4px 18px;
+  padding: 12px 16px;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text);
+  max-width: 72%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* avatar */
+.avatar {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.avatar.ai {
+  background: var(--accent);
+  color: #000;
+}
+.avatar.user-av {
+  background: var(--surface3);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+/* assistant content */
+.msg-content-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.msg-meta-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.agent-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+}
+.badge-model  { background: var(--surface3); color: var(--text-2); border-color: var(--border2); }
+.badge-faith  { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-glow); }
+.badge-faith.low { background: var(--amber-dim); color: var(--amber); border-color: rgba(245,158,11,0.25); }
+.badge-conflict { background: var(--amber-dim); color: var(--amber); border-color: rgba(245,158,11,0.25); }
+.badge-warn   { background: var(--red-dim); color: var(--red); border-color: rgba(248,113,113,0.2); }
+
+.msg-answer {
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--text);
+  font-weight: 300;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* conflict notice */
+.conflict-block {
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: var(--amber-dim);
+  border: 1px solid rgba(245,158,11,0.2);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--amber);
+  line-height: 1.5;
+}
+
+/* citations */
+.citations-block {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.citations-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+.cite-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.5;
+  padding: 3px 0;
+}
+.cite-index {
+  color: var(--accent);
+  flex-shrink: 0;
+  min-width: 18px;
+}
+
+/* feedback */
+.feedback-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.fb-label { font-size: 12px; color: var(--text-3); margin-right: 2px; }
+
+.fb-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.fb-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border2); }
+.fb-btn:disabled { opacity: 0.4; cursor: default; }
+.fb-btn.active-like    { background: var(--accent-dim); border-color: var(--accent-glow); color: var(--accent); }
+.fb-btn.active-dislike { background: var(--red-dim);    border-color: rgba(248,113,113,0.25); color: var(--red); }
+.fb-btn.active-unknown { background: var(--amber-dim);  border-color: rgba(245,158,11,0.25); color: var(--amber); }
+
+.fb-saved {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--accent);
+  margin-left: 4px;
+}
+
+/* dislike comment */
+.comment-wrap {
+  display: none;
+  margin-top: 10px;
+  gap: 8px;
+  flex-direction: column;
+  animation: fadeUp 0.2s ease;
+}
+.comment-wrap.open { display: flex; }
+
+.comment-wrap textarea {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text);
+  resize: none;
+  height: 80px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.comment-wrap textarea:focus { border-color: var(--accent-glow); }
+.comment-wrap textarea::placeholder { color: var(--text-3); }
+
+.btn-send-comment {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 7px 16px;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn-send-comment:hover { opacity: 0.85; }
+
+/* ── Thinking indicator ──────────────────────────────────────────────── */
+.thinking-row {
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
+}
+.thinking-inner {
+  width: 100%;
+  max-width: 740px;
+  margin: 0 auto;
+  padding: 0 32px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+.thinking-dots {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.thinking-dots span {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  display: inline-block;
+  animation: pulse 1.2s infinite ease-in-out;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* ── Input area ──────────────────────────────────────────────────────── */
+#input-area {
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  padding: 16px 0 20px;
+}
+
+.input-inner {
+  max-width: 740px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+
+.input-box {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.input-box:focus-within {
+  border-color: rgba(25,195,125,0.35);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+#query-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--font);
+  font-size: 15px;
+  color: var(--text);
+  resize: none;
+  min-height: 24px;
+  max-height: 160px;
+  line-height: 1.6;
+  padding: 0;
+}
+#query-input::placeholder { color: var(--text-3); }
+
+.btn-send {
+  width: 36px; height: 36px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s, transform 0.1s;
+  color: #000;
+}
+.btn-send:hover { opacity: 0.88; }
+.btn-send:active { transform: scale(0.93); }
+.btn-send:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
+
+.input-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 8px;
+  text-align: center;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Scrollbar global ────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 4px; }
+
+/* ── Responsive ──────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  aside { display: none; }
+  .msg-inner, .thinking-inner, .input-inner { padding: 0 16px; }
+  .starter-grid { grid-template-columns: 1fr; }
+  .msg-row.user .msg-bubble { max-width: 90%; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+<aside>
+  <div class="sidebar-header">
+    <a class="logo" href="#">
+      <div class="logo-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+      </div>
+      <span class="logo-text">RAG<span>·assist</span></span>
+    </a>
+  </div>
+
+  <button class="btn-new-chat" onclick="newChat()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    New conversation
+  </button>
+
+  <div class="sidebar-section-label">Recent</div>
+  <div id="history-list"></div>
+
+  <div class="sidebar-footer">
+    <div class="session-info">
+      <div class="session-dot"></div>
+      <span id="session-id-display">—</span>
+    </div>
+  </div>
+</aside>
+
+<!-- ── Main ───────────────────────────────────────────────────────── -->
+<main>
+  <div id="messages">
+    <!-- Empty state -->
+    <div id="empty-state">
+      <div class="empty-icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#19c37d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+      </div>
+      <div class="empty-title">Ask your knowledge base</div>
+      <div class="empty-sub">Query the RAG pipeline — grounded answers with citations, conflict detection, and feedback tracking.</div>
+      <div class="starter-grid">
+        <div class="starter-card" onclick="useStarter(this)">
+          <div class="starter-card-label">Main topics</div>
+          <div class="starter-card-sub">What are the main topics covered?</div>
+        </div>
+        <div class="starter-card" onclick="useStarter(this)">
+          <div class="starter-card-label">Key findings</div>
+          <div class="starter-card-sub">List the key findings from recent documents</div>
+        </div>
+        <div class="starter-card" onclick="useStarter(this)">
+          <div class="starter-card-label">Compare sources</div>
+          <div class="starter-card-sub">Compare and contrast the available sources</div>
+        </div>
+        <div class="starter-card" onclick="useStarter(this)">
+          <div class="starter-card-label">Summarize</div>
+          <div class="starter-card-sub">Summarize the most recent document</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Input -->
+  <div id="input-area">
+    <div class="input-inner">
+      <div class="input-box">
+        <textarea id="query-input" placeholder="Ask anything about your documents…" rows="1"></textarea>
+        <button class="btn-send" id="send-btn" onclick="submitQuery()" aria-label="Send">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="input-hint">Enter to send · Shift+Enter for new line</div>
+    </div>
+  </div>
+</main>
+
+<script>
+/* ── Session ─────────────────────────────────────────────────────────── */
+const SESSION_ID = 'sess-' + Math.random().toString(36).slice(2, 9);
+document.getElementById('session-id-display').textContent = SESSION_ID;
+
+/* ── Answer store (query_id → {question, answer}) ────────────────────── */
+// Avoids unsafe inline JS with embedded answer strings
+const _answerStore = {};
+
+/* ── History ─────────────────────────────────────────────────────────── */
+const _historyItems = [];
+
+function addToHistory(question, queryId) {
+  _historyItems.unshift({ question, queryId });
+  renderHistory();
+}
+
+function renderHistory() {
+  const el = document.getElementById('history-list');
+  el.innerHTML = _historyItems.slice(0, 30).map(h => `
+    <div class="history-item">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+      ${esc(h.question.slice(0, 42))}${h.question.length > 42 ? '…' : ''}
+    </div>
+  `).join('');
+}
+
+/* ── Input auto-resize ───────────────────────────────────────────────── */
+const textarea = document.getElementById('query-input');
+textarea.addEventListener('input', () => {
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 160) + 'px';
+});
+textarea.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitQuery(); }
+});
+
+function useStarter(el) {
+  textarea.value = el.querySelector('.starter-card-sub').textContent;
+  textarea.dispatchEvent(new Event('input'));
+  textarea.focus();
+}
+
+function newChat() {
+  fetch(`/session/${SESSION_ID}`, { method: 'DELETE' }).catch(() => {});
+  document.getElementById('messages').innerHTML = '';
+  document.getElementById('messages').appendChild(buildEmptyState());
+  _historyItems.length = 0;
+  renderHistory();
+}
+
+function buildEmptyState() {
+  // Re-create empty state without duplicating HTML
+  const d = document.createElement('div');
+  d.id = 'empty-state';
+  d.innerHTML = document.getElementById('empty-state')?.outerHTML
+    ? document.getElementById('empty-state').innerHTML : '';
+  return d;
+}
+
+/* ── Submit ──────────────────────────────────────────────────────────── */
+async function submitQuery() {
+  const q = textarea.value.trim();
+  if (!q) return;
+
+  const emptyState = document.getElementById('empty-state');
+  if (emptyState) emptyState.remove();
+
+  appendUserMessage(q);
+  textarea.value = '';
+  textarea.style.height = 'auto';
+
+  const btn = document.getElementById('send-btn');
+  btn.disabled = true;
+
+  const thinkingEl = appendThinking();
+
+  try {
+    const res = await fetch('/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, session_id: SESSION_ID }),
+    });
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    const data = await res.json();
+
+    thinkingEl.remove();
+    appendAssistantMessage(data, q);
+    addToHistory(q, data.query_id);
+    scrollToBottom();
+  } catch (err) {
+    thinkingEl.remove();
+    appendErrorMessage(err.message);
+  } finally {
+    btn.disabled = false;
+    scrollToBottom();
+  }
+}
+
+/* ── Render helpers ──────────────────────────────────────────────────── */
+function scrollToBottom() {
+  const msgs = document.getElementById('messages');
+  msgs.scrollTo({ top: msgs.scrollHeight, behavior: 'smooth' });
+}
+
+function appendUserMessage(text) {
+  const msgs = document.getElementById('messages');
+  const row = document.createElement('div');
+  row.className = 'msg-row user';
+  row.innerHTML = `
+    <div class="msg-inner">
+      <div class="msg-bubble">${esc(text)}</div>
+      <div class="avatar user-av">U</div>
+    </div>
+  `;
+  msgs.appendChild(row);
+  scrollToBottom();
+}
+
+function appendThinking() {
+  const msgs = document.getElementById('messages');
+  const row = document.createElement('div');
+  row.className = 'thinking-row';
+  row.innerHTML = `
+    <div class="thinking-inner">
+      <div class="avatar ai">R</div>
+      <div class="thinking-dots"><span></span><span></span><span></span></div>
+    </div>
+  `;
+  msgs.appendChild(row);
+  scrollToBottom();
+  return row;
+}
+
+function appendAssistantMessage(data, question) {
+  // Store for safe feedback retrieval
+  _answerStore[data.query_id] = { question, answer: data.answer };
+
+  const msgs = document.getElementById('messages');
+  const row = document.createElement('div');
+  row.className = 'msg-row assistant';
+  row.id = 'msg-' + data.query_id;
+
+  /* badges */
+  let badges = `<span class="badge badge-model">${esc(data.model_used)}</span>`;
+  if (data.faithfulness_score != null) {
+    const pct = (data.faithfulness_score * 100).toFixed(0);
+    const low = data.faithfulness_score < 0.5 ? ' low' : '';
+    badges += `<span class="badge badge-faith${low}">⬡ ${pct}% faithful</span>`;
+  }
+  if (data.has_conflict)      badges += `<span class="badge badge-conflict">⚡ conflict</span>`;
+  if (data.could_not_answer)  badges += `<span class="badge badge-warn">⚠ uncertain</span>`;
+
+  /* citations */
+  let citationsHtml = '';
+  if (data.citations && data.citations.length) {
+    const rows = data.citations.map((c, i) => {
+      const src = c.source_name || c.source_file || 'unknown';
+      const ts  = (c.ingestion_ts || '').slice(0, 10);
+      const id  = (c.chunk_id    || '').slice(0, 8);
+      return `<div class="cite-row">
+        <span class="cite-index">[${i + 1}]</span>
+        <span>${esc(id)}… · ${esc(src)}${ts ? ' · ' + esc(ts) : ''}</span>
+      </div>`;
+    }).join('');
+    citationsHtml = `
+      <div class="citations-block">
+        <div class="citations-label">Sources · ${data.citations.length}</div>
+        ${rows}
+      </div>`;
+  }
+
+  /* conflict */
+  const conflictHtml = data.has_conflict && data.conflict_resolution
+    ? `<div class="conflict-block">⚡ ${esc(data.conflict_resolution)}</div>` : '';
+
+  row.innerHTML = `
+    <div class="msg-inner">
+      <div class="avatar ai">R</div>
+      <div class="msg-content-wrap">
+        <div class="msg-meta-top">${badges}</div>
+        <div class="msg-answer">${esc(data.answer)}</div>
+        ${conflictHtml}
+        ${citationsHtml}
+        <div class="feedback-bar" id="fb-bar-${data.query_id}">
+          <span class="fb-label">Helpful?</span>
+          <button class="fb-btn" id="fb-like-${data.query_id}"
+            onclick="handleFeedback('${data.query_id}', 'like')">👍 Yes</button>
+          <button class="fb-btn" id="fb-dislike-${data.query_id}"
+            onclick="openComment('${data.query_id}')">👎 No</button>
+          <button class="fb-btn" id="fb-unknown-${data.query_id}"
+            onclick="handleFeedback('${data.query_id}', 'unknown')">🤷 Can't tell</button>
+        </div>
+        <div class="comment-wrap" id="comment-wrap-${data.query_id}">
+          <textarea id="comment-text-${data.query_id}"
+            placeholder="What went wrong? What were you expecting? (optional)"></textarea>
+          <button class="btn-send-comment"
+            onclick="submitDislike('${data.query_id}')">Send feedback</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  msgs.appendChild(row);
+}
+
+function appendErrorMessage(msg) {
+  const msgs = document.getElementById('messages');
+  const row = document.createElement('div');
+  row.className = 'msg-row assistant';
+  row.innerHTML = `
+    <div class="msg-inner">
+      <div class="avatar ai">R</div>
+      <div class="msg-content-wrap">
+        <div class="msg-answer" style="color:var(--red)">Error: ${esc(msg)}</div>
+      </div>
+    </div>
+  `;
+  msgs.appendChild(row);
+}
+
+/* ── Feedback ────────────────────────────────────────────────────────── */
+function openComment(queryId) {
+  document.getElementById('comment-wrap-' + queryId).classList.add('open');
+  document.getElementById('fb-dislike-' + queryId).classList.add('active-dislike');
+  document.getElementById('comment-text-' + queryId).focus();
+}
+
+async function submitDislike(queryId) {
+  const comment = (document.getElementById('comment-text-' + queryId)?.value || '').trim();
+  await handleFeedback(queryId, 'dislike', comment);
+  document.getElementById('comment-wrap-' + queryId).classList.remove('open');
+}
+
+async function handleFeedback(queryId, rating, comment = '') {
+  const stored = _answerStore[queryId];
+  if (!stored) { console.warn('No stored answer for', queryId); return; }
+
+  const payload = {
+    query_id:   queryId,
+    question:   stored.question,
+    answer:     stored.answer,
+    rating,
+    comment,
+    session_id: SESSION_ID,
+  };
+
+  try {
+    const res = await fetch('/feedback', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    });
+    if (!res.ok) console.warn('Feedback HTTP error', res.status);
+  } catch (e) {
+    console.warn('Feedback send failed:', e);
+  }
+
+  /* update UI */
+  ['like', 'dislike', 'unknown'].forEach(r => {
+    const btn = document.getElementById(`fb-${r}-${queryId}`);
+    if (btn) { btn.classList.remove(`active-${r}`); btn.disabled = true; }
+  });
+
+  const activeBtn = document.getElementById(`fb-${rating}-${queryId}`);
+  if (activeBtn) activeBtn.classList.add(`active-${rating}`);
+
+  const bar = document.getElementById('fb-bar-' + queryId);
+  if (bar && !bar.querySelector('.fb-saved')) {
+    const saved = document.createElement('span');
+    saved.className = 'fb-saved';
+    saved.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Saved`;
+    bar.appendChild(saved);
+  }
+}
+
+
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+</script>
+</body>
+</html>

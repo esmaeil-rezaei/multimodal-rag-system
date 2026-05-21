@@ -214,3 +214,8 @@ xxhash==3.6.0
 yarl==1.23.0
 zstandard==0.25.0
 openai-agents==0.0.17
+fastapi
+uvicorn
+jinja2
+python-multipart
+aiofiles

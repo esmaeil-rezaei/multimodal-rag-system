@@ -20,6 +20,7 @@ from src.agents.schemas import DirectResponseOutput, GenerationOutput
 from src.config.settings import get_config, get_secrets
 from src.generation.generator import GenerationResult
 from src.operations.ops_middleware import AccessControlMiddleware, PIIGuard
+from src.query.understanding import QueryUnderstanding
 from src.utils.logger import get_logger, set_correlation_id
 
 logger = get_logger(__name__)
@@ -35,6 +36,7 @@ class RAGOrchestrator:
     def __init__(self) -> None:
         self._acl = AccessControlMiddleware()
         self._pii_guard = PIIGuard()
+        self._query_understanding = QueryUnderstanding()
         self._max_turns = _cfg.query.get("agents", {}).get("max_turns", 15)
 
 
@@ -61,19 +63,26 @@ class RAGOrchestrator:
             logger.warning("ACL auth failed (%s); using default namespace.", exc)
 
 
+
+        condensed_query = self._query_understanding.condense_with_history(
+            raw_query,
+            conversation_history or []
+            )
+
         ctx = RAGRunContext(
             raw_query=raw_query,
             conversation_history=conversation_history or [],
+            processed_query = condensed_query,
             auth_token=auth_token,
             correlation_id=correlation_id,
             namespace=namespace,
         )
 
-
+        
         try:
             run_result = await Runner.run(
                 OrchestratorAgent,
-                input=self._build_input(raw_query, conversation_history or []),
+                input=raw_query,
                 context=ctx,
                 max_turns=self._max_turns,
             )
@@ -211,37 +220,4 @@ class RAGOrchestrator:
         return GenerationResult(
             answer="I'm sorry, I wasn't able to process that. Please try again.",
             model_used=last_agent_name,
-        )
-    
-    def _build_input(
-        self,
-        raw_query: str,
-        conversation_history: List[Dict[str, str]],
-    ) -> str:
-        if not conversation_history:
-            return raw_query
-
-
-        recent = conversation_history[-6:]
-
-        history_str = "\n".join(
-            f"{'User' if turn['role'] == 'user' else 'Assistant'}: {turn['content']}"
-            for turn in recent
-        )
-
-
-        last_answer = next(
-            (t["content"] for t in reversed(recent) if t["role"] == "assistant"),
-            None,
-        )
-
-        last_answer_block = (
-            f"\n<last_assistant_answer>\n{last_answer}\n</last_assistant_answer>"
-            if last_answer else ""
-        )
-
-        return (
-            f"<conversation_history>\n{history_str}\n</conversation_history>"
-            f"{last_answer_block}\n\n"
-            f"<current_query>{raw_query}</current_query>"
         )

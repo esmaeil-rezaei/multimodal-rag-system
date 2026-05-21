@@ -21,6 +21,12 @@ class RAGRunContext:
     generation_result: Optional[GenerationResult] = None
     agent_trace: List[str] = field(default_factory=list)
 
+    @property
+    def query_routing_intent(self) -> str:
+        if self.processed_query is not None:
+            return self.processed_query.query_routing_intent
+        return "retrieval"
+
     def record(self, agent_name: str, event: str) -> None:
         """Append a trace entry (agent_name: event) for observability."""
         self.agent_trace.append(f"[{agent_name}] {event}")

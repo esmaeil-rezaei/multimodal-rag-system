@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict
 
 import numpy as np                                 
 import openai                                       
@@ -182,6 +182,104 @@ class Retriever:
         return context_items
 
 
+    def retrieve_multi_query(
+        self,
+        pq: ProcessedQuery,
+        query_vector: np.ndarray,
+        sub_vectors: List[Tuple[str, np.ndarray]],
+        hyde_vector: Optional[np.ndarray] = None,
+        namespace: Optional[str] = None,
+    ) -> List[ContextItem]:
+        """
+        Multi-query retrieval: runs one search per sub-question (in parallel),
+        plus the main query (and optionally HyDE), then merges everything
+        with Reciprocal Rank Fusion before reranking and context management.
+ 
+        Args:
+            pq:           The processed query (main query text, filters, etc.)
+            query_vector: Embedding of the main standalone query.
+            sub_vectors:  List of (sub_question_text, embedding) pairs.
+            hyde_vector:  Optional HyDE embedding for the main query.
+            namespace:    Qdrant namespace / tenant scope.
+ 
+        Returns:
+            Deduplicated, reranked, context-managed list of ContextItems.
+        """
+        top_k_initial = self._ret_cfg["top_k_initial"]
+        top_k_final   = self._ret_cfg["top_k_final"]
+        rrf_k         = 60
+ 
+
+        search_pairs: List[Tuple[str, np.ndarray]] = [
+            (pq.final_query(), query_vector),
+        ]
+        if hyde_vector is not None:
+            search_pairs.append((pq.hypothetical_doc or pq.final_query(), hyde_vector))
+        search_pairs.extend(sub_vectors)
+ 
+
+        all_result_lists: List[List[SearchResult]] = []
+        for query_text, vector in search_pairs:
+            try:
+                results = self._search_engine.search(
+                    query=query_text,
+                    query_vector=vector,
+                    top_k=top_k_initial,
+                    namespace=namespace,
+                    metadata_filter=None,
+                )
+                all_result_lists.append(results)
+            except Exception as exc:
+                logger.warning("Sub-query search failed for '%s': %s", query_text[:60], exc)
+ 
+        if not all_result_lists:
+            logger.warning("All sub-query searches failed — returning empty context")
+            return []
+ 
+        scores: Dict[str, float] = {}
+        chunk_map: Dict[str, SearchResult] = {}
+ 
+        for result_list in all_result_lists:
+            for rank, result in enumerate(result_list, start=1):
+                cid = result.chunk.chunk_id or result.chunk.text[:50]
+                scores[cid] = scores.get(cid, 0.0) + 1.0 / (rrf_k + rank)
+                chunk_map.setdefault(cid, result)
+ 
+        sorted_cids = sorted(scores, key=lambda c: scores[c], reverse=True)[:top_k_initial]
+        raw_results: List[SearchResult] = []
+        for rank, cid in enumerate(sorted_cids, start=1):
+            r = chunk_map[cid]
+            r.score = scores[cid]
+            r.rank  = rank
+            r.retrieval_method = "multi_query"
+            raw_results.append(r)
+ 
+        n_queries = len(search_pairs)
+        n_sub     = len(sub_vectors)
+        logger.info(
+            "Multi-query retrieval merged: %d queries (%d sub-questions%s) → %d unique candidates",
+            n_queries,
+            n_sub,
+            " + HyDE" if hyde_vector is not None else "",
+            len(raw_results),
+        )
+ 
+        if self._ret_cfg["parent_child"]["enabled"]:
+            raw_results = self._expand_to_parents(raw_results)
+        if self._ret_cfg["sentence_window"]["enabled"]:
+            raw_results = self._expand_sentence_window(raw_results)
+        if self._ret_cfg["reranking"]["enabled"]:
+            raw_results = self._rerank(pq.final_query(), raw_results)
+ 
+        raw_results   = raw_results[:top_k_final]
+        ordered       = self._apply_position_aware_ordering(raw_results)
+        context_items = self._manage_context(ordered, pq.final_query())
+ 
+        logger.info("Final context (multi-query): %d items", len(context_items))
+        return context_items
+    
+    
+
     def _expand_to_parents(self, results: List[SearchResult]) -> List[SearchResult]:
         """
         If we hit a child chunk, replace it with its parent section.
@@ -206,6 +304,7 @@ class Retriever:
                     continue                        
             expanded.append(result)                
         return expanded
+
 
     def _fetch_chunk_by_id(self, chunk_id: str) -> Optional[ParsedChunk]:
         """

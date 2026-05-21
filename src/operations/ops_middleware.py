@@ -41,7 +41,11 @@ class SemanticCache:
             self._cache_key_prefix = "rag:semantic_cache:"          
             logger.info("Semantic cache initialised (Redis)")
 
-    def get(self, query_vector: np.ndarray) -> Optional[GenerationResult]:
+    def get(
+        self,
+        query_vector: np.ndarray,
+        query_routing_intent: str = "retrieval",
+    ) -> Optional[GenerationResult]:
         """
         Attempt to retrieve a cached GenerationResult for a query vector.
         Returns None on cache miss.
@@ -49,6 +53,10 @@ class SemanticCache:
         if not self._enabled:
             return None                            
 
+        if query_routing_intent == "conversational":
+            logger.debug("Semantic cache skipped (conversational intent)")
+            return None
+        
         # NOTE: linear scan fallback
         try:
             keys = self._redis.keys(f"{self._cache_key_prefix}*") 

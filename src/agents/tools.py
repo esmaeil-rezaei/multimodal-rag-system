@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from datetime import datetime
+import uuid
+
 from typing import Optional
 
+import numpy as np
+from src.config.settings import get_config, get_secrets
 from agents import RunContextWrapper, function_tool
 
 from src.agents.context import RAGRunContext
-
 from src.evaluation.evaluator import RAGEvaluator
 from src.generation.generator import Generator
 from src.indexing.embedder import QueryEmbedder
@@ -19,11 +24,24 @@ from src.operations.ops_middleware import (
     SemanticCache,
     TraceSpan,
 )
-from src.query.understanding import QueryUnderstanding, ProcessedQuery
+from src.query.understanding import QueryUnderstanding
 from src.retrieval.retriever import Retriever
 from src.utils.logger import get_logger, set_correlation_id
 
+
 logger = get_logger(__name__)
+_cfg = get_config()
+_sec = get_secrets()
+
+qu            = QueryUnderstanding()
+embedder      = QueryEmbedder()
+dense_store   = DenseVectorStore()
+sparse_index  = SparseIndex()
+search_engine = HybridSearchEngine(dense_store, sparse_index)
+retriever     = Retriever(search_engine, dense_store)
+evaluator     = RAGEvaluator()
+generator     = Generator()
+pii_guard     = PIIGuard()
 
 
 @function_tool
@@ -50,14 +68,14 @@ async def prepare_query(
         extra={"query": query, "correlation_id": ctx.context.correlation_id},
     )
 
-    qu = QueryUnderstanding()
     effective_query = query or ctx.context.raw_query
 
     with TraceSpan("understand_query"):
         try:
             pq = qu.process(
                 query=effective_query,
-                conversation_history=ctx.context.conversation_history or [],
+                raw_query=ctx.context.raw_query,
+                conversation_history=ctx.context.conversation_history,
             )
             ctx.context.processed_query = pq
             ctx.context.record("understand_query_tool", f"{len(pq.sub_questions)} sub-questions")
@@ -112,11 +130,7 @@ async def retrieve_context(
 
     with TraceSpan("query_embedding"):
         try:
-            embedder      = QueryEmbedder()
-            dense_store   = DenseVectorStore()
-            sparse_index  = SparseIndex()
-            search_engine = HybridSearchEngine(dense_store, sparse_index)
-            retriever     = Retriever(search_engine, dense_store)
+
 
             query_vector = embedder.embed_query(
                 pq.final_query(), language=pq.language
@@ -130,6 +144,22 @@ async def retrieve_context(
                 logger.info(
                     "HyDE vector generated — dual retrieval will be used",
                     extra={"hyde_preview": pq.hypothetical_doc[:120]},
+                )
+            
+            # Embed each sub-question for multi-query retrieval
+            sub_vectors = []
+            for sq in pq.sub_questions:
+                try:
+                    sub_vec = embedder.embed_query(sq, language=pq.language)
+                    sub_vectors.append((sq, sub_vec))
+                except Exception as exc:
+                    logger.warning("Sub-question embedding failed for '%s': %s", sq[:60], exc)
+ 
+            if sub_vectors:
+                logger.info(
+                    "Sub-question vectors generated: %d / %d",
+                    len(sub_vectors),
+                    len(pq.sub_questions),
                 )
 
         except Exception as exc:
@@ -154,7 +184,6 @@ async def retrieve_context(
 
 
     try:
-        evaluator = RAGEvaluator()
         evaluator.update_reference_distribution(query_vector)
         ctx.context._evaluator = evaluator      # reused in generate_answer
     except Exception as exc:
@@ -164,7 +193,22 @@ async def retrieve_context(
 
     with TraceSpan("retrieval", {"namespace": namespace}):
         try:
-            if hyde_vector is not None:
+            if sub_vectors:
+                context_items = retriever.retrieve_multi_query(
+                    pq=pq,
+                    query_vector=query_vector,
+                    sub_vectors=sub_vectors,
+                    hyde_vector=hyde_vector,
+                    namespace=namespace,
+                )
+                method = "multi_query"
+                logger.info(
+                    "Multi-query retrieval (%d sub-questions%s): %d context items",
+                    len(sub_vectors),
+                    " + HyDE" if hyde_vector else "",
+                    len(context_items),
+                )
+            elif hyde_vector is not None:
                 context_items = retriever.retrieve_dual(
                     pq=pq,
                     query_vector=query_vector,
@@ -173,7 +217,8 @@ async def retrieve_context(
                 )
                 method = "hyde_dual"
                 logger.info(
-                    f"Dual retrieval (query + HyDE): {len(context_items)} context items"
+                    "Dual retrieval (query + HyDE): %d context items",
+                    len(context_items),
                 )
             else:
                 context_items = retriever.retrieve(
@@ -213,21 +258,29 @@ async def generate_answer(
     ctx: RunContextWrapper[RAGRunContext],
 ) -> str:
 
-
-    # if getattr(ctx.context, "generation_result", None) is not None:
-    #     result = ctx.context.generation_result
-    #     logger.info("generate_answer: returning cached generation result")
-    #     return json.dumps({
-    #         "answer": result.answer,
-    #         "citations": [c.get("chunk_id") for c in result.citations],
-    #         "faithfulness_score": result.faithfulness_score,
-    #         "has_conflict": result.has_conflict,
-    #     })
-
     pq            = ctx.context.processed_query
     context_items = ctx.context.context_items
 
     if not context_items:
+
+        unanswered_dir = Path(_cfg.log.unknown_query_dir)
+        unanswered_dir.mkdir(parents=True, exist_ok=True)
+
+        payload = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "query": ctx.context.raw_query,
+            "reason": "No relevant context found",
+            "conversation_history": ctx.context.conversation_history,
+        }
+
+        filename = unanswered_dir / (
+            f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_"
+            f"{uuid.uuid4().hex[:8]}.json"
+        )
+
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+
         return json.dumps({
             "answer": "I could not find relevant information to answer your question.",
             "citations": [],
@@ -238,7 +291,6 @@ async def generate_answer(
 
     with TraceSpan("generation"):
         try:
-            generator  = Generator()
             query_text = pq.original_query if pq else ctx.context.raw_query
 
             result = generator.generate(
@@ -262,7 +314,6 @@ async def generate_answer(
 
     with TraceSpan("output_pii_scan"):
         try:
-            pii_guard     = PIIGuard()
             result.answer = pii_guard.redact(result.answer, context="output")
         except Exception as exc:
             logger.warning("Output PII scan failed (non-fatal): %s", exc)
@@ -320,3 +371,7 @@ async def generate_answer(
         "faithfulness_score": result.faithfulness_score,
         "has_conflict": result.has_conflict,
     })
+
+
+
+
