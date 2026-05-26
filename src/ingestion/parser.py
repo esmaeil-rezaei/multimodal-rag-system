@@ -21,7 +21,6 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-
 @dataclass
 class ParsedChunk:
     """
@@ -32,14 +31,13 @@ class ParsedChunk:
     chunk_id: Optional[str] = None
     source_file: Optional[str] = None
     source_name: Optional[str] = None
-    modality: str = "text"              
+    modality: str = "text"
     language: Optional[str] = None
     doc_version: Optional[str] = None
     ingestion_ts: Optional[str] = None
 
     def compute_fingerprint(self) -> str:
         return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
-
 
 class _HeadingTracker:
     """
@@ -69,7 +67,6 @@ class _HeadingTracker:
     def breadcrumb(self) -> str:
         """Full ancestor path, e.g. 'Introduction > Background > Methods'."""
         return " > ".join(title for _, title in self._stack)
-
 
 def _infer_depth_from_font_size(
     title_elements: List[Element],
@@ -111,7 +108,6 @@ def _infer_depth_from_font_size(
         depth_map[eid] = min(bucket + 1, max_levels)  # 1-indexed depth
     return depth_map
 
-
 class DocumentParser:
     """
     Routes files to the appropriate parser and returns normalized ParsedChunks.
@@ -144,26 +140,33 @@ class DocumentParser:
             logger.warning(f"Unsupported extension: {suffix} for {file_path}")
             return []
 
-    
     def _parse_pdf(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         """
         Parse PDF into chunked elements with hierarchical section metadata.
         Section context is derived using metadata when available, otherwise layout heuristics.
+
+        Images extracted from the PDF are saved to a subdirectory named after the source
+        document (``<image_output_dir>/<stem>/``) so images from different papers are
+        never mixed together in a single flat folder.
         """
         parsing_cfg = self._ingest_cfg["parsing"]
+
+        # Use a per-document subdirectory so images from different PDFs don't collide.
+        base_image_dir = Path(parsing_cfg["image_output_dir"])
+        doc_image_dir = base_image_dir / file_path.stem
+        doc_image_dir.mkdir(parents=True, exist_ok=True)
 
         elements: List[Element] = partition_pdf(
             filename=str(file_path),
             strategy=parsing_cfg["pdf_strategy"],
             languages=parsing_cfg["ocr_languages"],
             extract_images_in_pdf=parsing_cfg["extract_images"],
-            extract_image_block_output_dir=parsing_cfg["image_output_dir"],
+            extract_image_block_output_dir=str(doc_image_dir),
         )
 
         title_elements = [el for el in elements if isinstance(el, Title)]
         fallback_depth_map = _infer_depth_from_font_size(title_elements)
 
-        # walk elements in order with heading tracker
         tracker = _HeadingTracker()
         chunks: List[ParsedChunk] = []
 
@@ -208,7 +211,6 @@ class DocumentParser:
 
         return chunks
 
-
     def _parse_md(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         """
         Parse Markdown using unstructured's partition_md with heading-tracker.
@@ -236,7 +238,6 @@ class DocumentParser:
             chunks.append(chunk)
 
         return chunks
-
 
     def _parse_txt(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         """
@@ -270,8 +271,6 @@ class DocumentParser:
             chunks.append(chunk)
 
         return chunks
-
-
 
     def _extract_tables_camelot(
         self, file_path: Path, source_name: str
@@ -318,7 +317,7 @@ class DocumentParser:
                     "columns": col_metadata,
                     "accuracy": table.accuracy,
                     "whitespace": table.whitespace,
-                    "section": "",                  
+                    "section": "",
                     "section_depth": 0,
                     "breadcrumb": "",
                 },
@@ -327,7 +326,6 @@ class DocumentParser:
             chunks.append(chunk)
 
         return chunks
-
 
     def _caption_image(
         self, element: Image, file_path: Path, source_name: str
@@ -402,8 +400,6 @@ class DocumentParser:
         chunk.chunk_id = chunk.compute_fingerprint()
         return chunk
 
-
-
     def _parse_standalone_image(
         self, file_path: Path, source_name: str
     ) -> List[ParsedChunk]:
@@ -452,7 +448,6 @@ class DocumentParser:
         chunk.chunk_id = chunk.compute_fingerprint()
         return [chunk]
 
-
     def _parse_docx(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         elements: List[Element] = partition(filename=str(file_path), strategy="fast")
         return self._walk_elements_with_tracker(elements, file_path, source_name)
@@ -488,7 +483,6 @@ class DocumentParser:
 
         return chunks
 
-
     def _element_to_chunk(
         self,
         element: Element,
@@ -513,7 +507,7 @@ class DocumentParser:
                 "element_id": getattr(element, "id", None),
                 "page_number": getattr(meta, "page_number", None),
                 "coordinates": getattr(meta, "coordinates", None),
-                "section": "",  
+                "section": "",
                 "section_depth": 0,
                 "breadcrumb": "",
             },
@@ -541,7 +535,6 @@ class DocumentParser:
             return detect_language(text)
         except Exception:
             return None
-
 
 def _read_with_encoding_fallback(file_path: Path, preferred: str) -> str:
     """

@@ -28,10 +28,15 @@ class Secrets(BaseSettings):
     encryption_key: Optional[str] = Field(None, env="ENCRYPTION_KEY")
     jwt_secret_key: Optional[str] = Field(None, env="JWT_SECRET_KEY")
 
+    neo4j_uri: str = Field("neo4j://localhost:7687", env="NEO4J_URI")
+    neo4j_username: str = Field("neo4j", env="NEO4J_USERNAME")
+    neo4j_password: str = Field("password", env="NEO4J_PASSWORD")
+    neo4j_database: str = Field("neo4j", env="NEO4J_DATABASE")
+
     app_env: str = Field("development", env="APP_ENV")
     log_level: str = Field("INFO", env="LOG_LEVEL")
     class Config:
-        env_file = str(ENV_PATH)  
+        env_file = str(ENV_PATH)
         env_file_encoding = "utf-8"
         case_sensitive = False
 
@@ -86,10 +91,14 @@ class AppConfig:
     @property
     def operations(self) -> Dict[str, Any]:
         return self._data["operations"]
-    
+
     @property
     def log(self) -> Dict[str, Any]:
         return self._data["log"]
+
+    @property
+    def graphrag(self) -> Dict[str, Any]:
+        return self._data.get("graphrag", {})
 
     def get(self, key: str, default: Optional[Any] = None) -> Any:
         """Dot-path lookup (e.g. 'ingestion.versioning.ttl_days')."""
@@ -101,7 +110,6 @@ class AppConfig:
             node = node.get(k, default)
         return node
 
-
 def load_yaml_config() -> AppConfig:
     """Load YAML configuration file."""
     if not CONFIG_PATH.exists():
@@ -112,12 +120,10 @@ def load_yaml_config() -> AppConfig:
 
     return AppConfig(raw)
 
-
 @lru_cache(maxsize=1)
 def get_secrets() -> Secrets:
     """Load and cache environment-based secrets."""
     return Secrets()
-
 
 @lru_cache(maxsize=1)
 def get_config() -> AppConfig:

@@ -3,27 +3,26 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np                               
+import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from src.config.settings import get_config 
-from src.ingestion.chunker import ChunkNode        
-from src.ingestion.parser import ParsedChunk     
-from src.utils.logger import get_logger  
-import torch     
+from src.config.settings import get_config
+from src.ingestion.chunker import ChunkNode
+from src.ingestion.parser import ParsedChunk
+from src.utils.logger import get_logger
+import torch
 
 logger = get_logger(__name__)
 
-
 class EmbeddingRouter:
-    
+
     """
     Routes chunks to embedding models based on domain and language.
     """
 
     def __init__(self) -> None:
         self._cfg = get_config()
-        self._emb_cfg = self._cfg.embeddings  
+        self._emb_cfg = self._cfg.embeddings
 
         self._default_model_name: str = self._emb_cfg["default_model"]
         self._multilingual_model_name: str = self._emb_cfg["multilingual_model"]
@@ -35,7 +34,6 @@ class EmbeddingRouter:
         self._model_cache: Dict[str, SentenceTransformer] = {}
         self._load_model(self._default_model_name)
 
-
     def embed_nodes(self, nodes: List[ChunkNode]) -> List[Tuple[ChunkNode, np.ndarray]]:
         """
         Embed a list of nodes, routing each to the appropriate model by domain and language.
@@ -44,14 +42,14 @@ class EmbeddingRouter:
         groups: Dict[str, List[Tuple[int, ChunkNode]]] = {}
 
         for idx, node in enumerate(nodes):
-            model_name = self._select_model(node.chunk) 
+            model_name = self._select_model(node.chunk)
             groups.setdefault(model_name, []).append((idx, node))
 
         result_pairs: List[Optional[Tuple[ChunkNode, np.ndarray]]] = [None] * len(nodes)
 
         for model_name, indexed_nodes in groups.items():
-            model = self._load_model(model_name)        
-            texts = [n.chunk.text for _, n in indexed_nodes] 
+            model = self._load_model(model_name)
+            texts = [n.chunk.text for _, n in indexed_nodes]
 
             vectors = self._batch_encode(model, texts)
 
@@ -60,8 +58,6 @@ class EmbeddingRouter:
 
         return [(node, vec) for pair in result_pairs if pair for node, vec in [pair]]
 
-
-
     def _select_model(self, chunk: ParsedChunk) -> str:
         """
         Select embedding model based on domain and language.
@@ -69,7 +65,7 @@ class EmbeddingRouter:
 
         source = (chunk.source_name or "").lower()
         for domain_key, domain_model in self._domain_model_map.items():
-            if domain_key.lower() in source:         
+            if domain_key.lower() in source:
                 logger.debug(f"Domain model '{domain_model}' selected for source '{source}'")
                 return domain_model
 
@@ -79,9 +75,7 @@ class EmbeddingRouter:
             )
             return self._multilingual_model_name
 
-        return self._default_model_name        
-
-
+        return self._default_model_name
 
     def _load_model(self, model_name: str) -> SentenceTransformer:
         """
@@ -95,8 +89,6 @@ class EmbeddingRouter:
             )
         return self._model_cache[model_name]
 
-
-
     def _batch_encode(
         self, model: SentenceTransformer, texts: List[str]
     ) -> np.ndarray:
@@ -109,24 +101,21 @@ class EmbeddingRouter:
             batch = texts[start : start + self._batch_size]
             vectors = model.encode(
                 batch,
-                show_progress_bar=False,         
-                normalize_embeddings=True,          
-                convert_to_numpy=True,      
+                show_progress_bar=False,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
             )
             all_vectors.append(vectors)
 
-        return np.vstack(all_vectors)              
-
-
+        return np.vstack(all_vectors)
 
     @staticmethod
     def _gpu_available() -> bool:
         """Check CUDA availability."""
-        try:                        
+        try:
             return torch.cuda.is_available()
         except ImportError:
-            return False                    
-
+            return False
 
 class QueryEmbedder:
     """
@@ -144,10 +133,10 @@ class QueryEmbedder:
         """
         dummy_chunk = ParsedChunk(text=query, language=language)
         model_name = self._router._select_model(dummy_chunk)
-        model = self._router._load_model(model_name)       
+        model = self._router._load_model(model_name)
         vector: np.ndarray = model.encode(
             query,
-            normalize_embeddings=True,          
+            normalize_embeddings=True,
             convert_to_numpy=True,
         )
-        return vector                             
+        return vector

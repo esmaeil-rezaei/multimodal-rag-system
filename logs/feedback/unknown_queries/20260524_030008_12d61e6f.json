@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-05-24T03:00:08.578989",
+  "query": "what is the time intervals between multiple testst in the mdlc",
+  "reason": "No relevant context found",
+  "conversation_history": [
+    {
+      "role": "user",
+      "content": "give e folrmula"
+    },
+    {
+      "role": "assistant",
+      "content": "I cannot answer this from the available context."
+    }
+  ]
+}

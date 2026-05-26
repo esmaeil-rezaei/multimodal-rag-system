@@ -20,8 +20,6 @@ logger = get_logger(__name__)
 _cfg = get_config()
 _pii_guard = PIIGuard()
 
-
-
 @input_guardrail
 async def pii_input_guardrail(
     ctx: RunContextWrapper[RAGRunContext],
@@ -52,7 +50,6 @@ async def pii_input_guardrail(
             tripwire_triggered=True,
         )
 
-    # case 1: pii not detected
     if result == input:
         logger.info(
             "PII scan clean",
@@ -64,7 +61,6 @@ async def pii_input_guardrail(
             tripwire_triggered=False,
         )
 
-    # case 2: pii detected 
     if block_on_pii:
         logger.warning(
             "PHI detected — query blocked",
@@ -83,15 +79,12 @@ async def pii_input_guardrail(
             tripwire_triggered=True,
         )
 
-
-
 @output_guardrail
 async def output_faithfulness_guardrail(
     ctx: RunContextWrapper[RAGRunContext],
     agent: Agent,
     output: GenerationOutput,
 ) -> GuardrailFunctionOutput:
-
 
     min_score: float = _cfg.query.get("guardrails", {}).get(
         "min_faithfulness_score", 0.40
@@ -118,15 +111,12 @@ async def output_faithfulness_guardrail(
         output_info=f"faithfulness_ok: {score}", tripwire_triggered=False
     )
 
-
-
 @output_guardrail
 async def output_length_guardrail(
     ctx: RunContextWrapper[RAGRunContext],
     agent: Agent,
     output: GenerationOutput,
 ) -> GuardrailFunctionOutput:
-
 
     min_tokens: int = _cfg.query.get("guardrails", {}).get("min_answer_tokens", 20)
     max_tokens: int = _cfg.query.get("guardrails", {}).get("max_answer_tokens", 8000)

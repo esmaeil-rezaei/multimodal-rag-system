@@ -1,73 +1,57 @@
-
-
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from datetime import datetime
 import uuid
-
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from src.config.settings import get_config, get_secrets
 from agents import RunContextWrapper, function_tool
 
 from src.agents.context import RAGRunContext
-from src.evaluation.evaluator import RAGEvaluator
-from src.generation.generator import Generator
-from src.indexing.embedder import QueryEmbedder
-from src.indexing.vector_store import DenseVectorStore, HybridSearchEngine, SparseIndex
-from src.operations.ops_middleware import (
-    AccessControlMiddleware,
-    PIIGuard,
-    SemanticCache,
-    TraceSpan,
-)
-from src.query.understanding import QueryUnderstanding
-from src.retrieval.retriever import Retriever
+from src.config.settings import get_config
+from src.operations.ops_middleware import TraceSpan, SemanticCache
+from src.query.understanding import ProcessedQuery
 from src.utils.logger import get_logger, set_correlation_id
-
 
 logger = get_logger(__name__)
 _cfg = get_config()
-_sec = get_secrets()
 
-qu            = QueryUnderstanding()
-embedder      = QueryEmbedder()
-dense_store   = DenseVectorStore()
-sparse_index  = SparseIndex()
-search_engine = HybridSearchEngine(dense_store, sparse_index)
-retriever     = Retriever(search_engine, dense_store)
-evaluator     = RAGEvaluator()
-generator     = Generator()
-pii_guard     = PIIGuard()
-
+def _container(ctx: RunContextWrapper[RAGRunContext]):
+    """Resolve the AppContainer — fails fast with a clear message."""
+    c = ctx.context.container
+    if c is None:
+        raise RuntimeError(
+            "AppContainer not attached to RAGRunContext. "
+            "Ensure RAGOrchestrator passes container= when constructing the context."
+        )
+    return c
 
 @function_tool
 async def get_conversation_history(
     ctx: RunContextWrapper[RAGRunContext],
 ) -> str:
     return json.dumps({
-        "conversation_history": ctx.context.conversation_history or []
-    })
-
-
+        "conversation_history": ctx.context.conversation_history[-5:] if ctx.context.conversation_history else []
+        })
 
 @function_tool
 async def prepare_query(
     ctx: RunContextWrapper[RAGRunContext],
     query: str,
 ) -> str:
-
-
+    """
+    Run query understanding: rewrite, decompose, HyDE, entity filters.
+    Stores the ProcessedQuery on ctx.context.processed_query.
+    """
     if not getattr(ctx.context, "correlation_id", None):
         ctx.context.correlation_id = set_correlation_id()
-    logger.info(
-        "understand_query tool started",
-        extra={"query": query, "correlation_id": ctx.context.correlation_id},
-    )
 
+    logger.info("understand_query tool started",
+                extra={"query": query, "correlation_id": ctx.context.correlation_id})
+
+    qu = _container(ctx).query_understanding
     effective_query = query or ctx.context.raw_query
 
     with TraceSpan("understand_query"):
@@ -80,98 +64,84 @@ async def prepare_query(
             ctx.context.processed_query = pq
             ctx.context.record("understand_query_tool", f"{len(pq.sub_questions)} sub-questions")
 
-
             sub_questions = [
                 sq if isinstance(sq, str) else sq.text for sq in pq.sub_questions
             ]
 
-            if pq.hypothetical_doc:
-                logger.info(
-                    "HyDE document generated — dual retrieval will be used",
-                    extra={"hyde_preview": pq.hypothetical_doc[:120]},
-                )
+            if pq.hypothetical_doc is not None:
+                logger.info("HyDE document generated — dual retrieval will be used",
+                            extra={"hyde_preview": pq.hypothetical_doc[:120]})
 
             return json.dumps({
                 "standalone_query": pq.standalone_query,
-                "sub_questions": pq.sub_questions,
+                "sub_questions": sub_questions,
                 "search_queries": [pq.standalone_query] + sub_questions,
                 "requires_hyde": pq.hypothetical_doc is not None,
                 "metadata_filters": pq.metadata_filters,
             })
-
         except Exception as exc:
-            logger.error("understand_query tool failed: %s", exc)
+            logger.error("understand_query tool failed: %s", exc, exc_info=True)
             return json.dumps({"error": str(exc), "standalone_query": query})
-
-
 
 @function_tool
 async def retrieve_context(
     ctx: RunContextWrapper[RAGRunContext],
-    auth_token: Optional[str] = None,
 ) -> str:
-
-
+    """
+    Embed the query, check semantic cache, run hybrid multi-query retrieval.
+    Stores context items on ctx.context.context_items.
+    Namespace is read from ctx.context.namespace (set by the orchestrator).
+    """
     pq = ctx.context.processed_query
     if pq is None:
-        return json.dumps({"error": "processed_query not set — run understand_query first"})
+        return json.dumps({"error": "processed_query not set — run prepare_query first"})
 
+    container = _container(ctx)
+    embedder   = container.embedder
+    retriever  = container.retriever
+    evaluator  = container.evaluator
 
-    with TraceSpan("acl_auth"):
-        acl = AccessControlMiddleware()
-        try:
-            claims = acl.authenticate(auth_token or "")
-        except Exception as exc:
-            logger.warning("Auth failed (defaulting to public namespace): %s", exc)
-            claims = {"namespace": "default", "roles": ["public"]}
-        namespace = acl.get_namespace(claims)
-        ctx.context.namespace = namespace
-
+    namespace = ctx.context.namespace or "default"
 
     with TraceSpan("query_embedding"):
         try:
-
-
-            query_vector = embedder.embed_query(
+            query_vector: np.ndarray = embedder.embed_query(
                 pq.final_query(), language=pq.language
             )
 
-            hyde_vector = None
-            if pq.hypothetical_doc:
+            hyde_vector: Optional[np.ndarray] = None
+            if pq.hypothetical_doc is not None:
                 hyde_vector = embedder.embed_query(
                     pq.hypothetical_doc, language=pq.language
                 )
-                logger.info(
-                    "HyDE vector generated — dual retrieval will be used",
-                    extra={"hyde_preview": pq.hypothetical_doc[:120]},
-                )
-            
-            # Embed each sub-question for multi-query retrieval
+                logger.info("HyDE vector generated — dual retrieval will be used",
+                            extra={"hyde_preview": pq.hypothetical_doc[:120]})
+
             sub_vectors = []
             for sq in pq.sub_questions:
                 try:
-                    sub_vec = embedder.embed_query(sq, language=pq.language)
-                    sub_vectors.append((sq, sub_vec))
+                    sv = embedder.embed_query(sq, language=pq.language)
+                    sub_vectors.append((sq, sv))
                 except Exception as exc:
                     logger.warning("Sub-question embedding failed for '%s': %s", sq[:60], exc)
- 
+
             if sub_vectors:
-                logger.info(
-                    "Sub-question vectors generated: %d / %d",
-                    len(sub_vectors),
-                    len(pq.sub_questions),
-                )
+                logger.info("Sub-question vectors generated: %d / %d",
+                            len(sub_vectors), len(pq.sub_questions))
 
         except Exception as exc:
-            logger.error("Embedding failed: %s", exc)
+            logger.error("Embedding failed: %s", exc, exc_info=True)
             return json.dumps({"error": str(exc), "chunks_retrieved": 0})
 
-
     with TraceSpan("cache_lookup"):
-        cache  = SemanticCache()
-        cached = cache.get(query_vector)
+        cache = SemanticCache()
+        cached = cache.get(
+            query_vector,
+            query_routing_intent=ctx.context.query_routing_intent,
+            namespace=namespace,
+        )
 
-    if cached:
+    if cached is not None:
         logger.info("Cache hit — skipping retrieval and generation")
         ctx.context.generation_result = cached
         ctx.context.record("retrieve_context_tool", "cache_hit")
@@ -182,14 +152,12 @@ async def retrieve_context(
             "cache_hit": True,
         })
 
-
     try:
         evaluator.update_reference_distribution(query_vector)
-        ctx.context._evaluator = evaluator      # reused in generate_answer
+        ctx.context._evaluator = evaluator
     except Exception as exc:
         logger.warning("Evaluator reference update failed (non-fatal): %s", exc)
         ctx.context._evaluator = None
-
 
     with TraceSpan("retrieval", {"namespace": namespace}):
         try:
@@ -198,16 +166,10 @@ async def retrieve_context(
                     pq=pq,
                     query_vector=query_vector,
                     sub_vectors=sub_vectors,
-                    hyde_vector=hyde_vector,
+                    hyde_vector=hyde_vector,   # may be None — retriever handles it
                     namespace=namespace,
                 )
                 method = "multi_query"
-                logger.info(
-                    "Multi-query retrieval (%d sub-questions%s): %d context items",
-                    len(sub_vectors),
-                    " + HyDE" if hyde_vector else "",
-                    len(context_items),
-                )
             elif hyde_vector is not None:
                 context_items = retriever.retrieve_dual(
                     pq=pq,
@@ -216,10 +178,6 @@ async def retrieve_context(
                     namespace=namespace,
                 )
                 method = "hyde_dual"
-                logger.info(
-                    "Dual retrieval (query + HyDE): %d context items",
-                    len(context_items),
-                )
             else:
                 context_items = retriever.retrieve(
                     pq=pq,
@@ -229,10 +187,9 @@ async def retrieve_context(
                 method = "dense"
 
             ctx.context.context_items = context_items
-            ctx.context._query_vector = query_vector   
-            ctx.context.record(
-                "retrieve_context_tool", f"{len(context_items)} chunks via {method}"
-            )
+            ctx.context._query_vector = query_vector
+            ctx.context.record("retrieve_context_tool",
+                               f"{len(context_items)} chunks via {method}")
 
             sources = list({
                 item.chunk.source_name
@@ -248,38 +205,38 @@ async def retrieve_context(
             })
 
         except Exception as exc:
-            logger.error("retrieve_context tool failed: %s", exc)
+            logger.error("retrieve_context tool failed: %s", exc, exc_info=True)
             return json.dumps({"error": str(exc), "chunks_retrieved": 0})
-
-
 
 @function_tool
 async def generate_answer(
     ctx: RunContextWrapper[RAGRunContext],
 ) -> str:
-
+    """
+    Generate a grounded answer from retrieved context.
+    Also writes cache, runs online evaluation.
+    """
     pq            = ctx.context.processed_query
     context_items = ctx.context.context_items
 
     if not context_items:
-
-        unanswered_dir = Path(_cfg.log.unknown_query_dir)
+        # Log unanswered query
+        unanswered_dir = Path(_cfg.log.get("unknown_query_dir", "logs/unknown"))
         unanswered_dir.mkdir(parents=True, exist_ok=True)
-
         payload = {
             "timestamp": datetime.utcnow().isoformat(),
             "query": ctx.context.raw_query,
             "reason": "No relevant context found",
             "conversation_history": ctx.context.conversation_history,
         }
-
-        filename = unanswered_dir / (
-            f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_"
-            f"{uuid.uuid4().hex[:8]}.json"
+        fname = (
+            unanswered_dir
+            / f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.json"
         )
-
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
+        try:
+            fname.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+        except Exception as exc:
+            logger.warning("Failed to write unanswered query log: %s", exc)
 
         return json.dumps({
             "answer": "I could not find relevant information to answer your question.",
@@ -288,22 +245,26 @@ async def generate_answer(
             "has_conflict": False,
         })
 
+    container = _container(ctx)
+    generator = container.generator
+    pii_guard = container.pii_guard
 
     with TraceSpan("generation"):
         try:
-            query_text = pq.original_query if pq else ctx.context.raw_query
-
+            query_text = (
+                pq.original_query
+                if isinstance(pq, ProcessedQuery)
+                else ctx.context.raw_query
+            )
             result = generator.generate(
                 query=query_text,
                 context_items=context_items,
             )
             ctx.context.generation_result = result
-            ctx.context.record(
-                "generate_answer_tool", f"faithfulness={result.faithfulness_score}"
-            )
-
+            ctx.context.record("generate_answer_tool",
+                               f"faithfulness={result.faithfulness_score}")
         except Exception as exc:
-            logger.error("generate_answer tool failed during generation: %s", exc)
+            logger.error("generate_answer tool failed during generation: %s", exc, exc_info=True)
             return json.dumps({
                 "answer": "An error occurred while generating the answer.",
                 "citations": [],
@@ -311,67 +272,54 @@ async def generate_answer(
                 "has_conflict": False,
             })
 
-
     with TraceSpan("output_pii_scan"):
         try:
             result.answer = pii_guard.redact(result.answer, context="output")
         except Exception as exc:
             logger.warning("Output PII scan failed (non-fatal): %s", exc)
 
-
     with TraceSpan("cache_store"):
-        query_vector = getattr(ctx.context, "_query_vector", None)
+        query_vector = ctx.context._query_vector
         if query_vector is not None:
             try:
                 cache = SemanticCache()
-                cache.put(query_vector, result)
+                cache.put(query_vector, result, namespace=ctx.context.namespace or None)
             except Exception as exc:
                 logger.warning("Cache store failed (non-fatal): %s", exc)
         else:
             logger.warning("No _query_vector in context — skipping cache store")
 
-
     try:
-        evaluator     = getattr(ctx.context, "_evaluator", None) or RAGEvaluator()
+        ev = ctx.context._evaluator or container.evaluator
         context_texts = [item.chunk.text for item in context_items]
-        raw_query     = pq.original_query if pq else ctx.context.raw_query
-
-        report = evaluator.evaluate_online(
-            query=raw_query,
+        raw_q = (
+            pq.original_query if isinstance(pq, ProcessedQuery) else ctx.context.raw_query
+        )
+        report = ev.evaluate_online(
+            query=raw_q,
             answer=result.answer,
             context_texts=context_texts,
         )
-        logger.info(
-            "Online evaluation complete",
-            extra={
-                "overall_score": report.overall_score,
-                "scores": report.ragas_scores or report.custom_judge_scores,
-            },
-        )
+        logger.info("Online evaluation complete",
+                    extra={"overall_score": report.overall_score,
+                           "scores": report.ragas_scores or report.custom_judge_scores})
     except Exception as exc:
         logger.warning("Online evaluation failed (non-fatal): %s", exc)
-
 
     logger.info(
         "generate_answer tool complete",
         extra={
-            "faithfulness": result.faithfulness_score,
-            "citations": len(result.citations),
-            "prompt_tokens": result.prompt_tokens,
+            "faithfulness":      result.faithfulness_score,
+            "citations":         len(result.citations),
+            "prompt_tokens":     result.prompt_tokens,
             "completion_tokens": result.completion_tokens,
-            "has_conflict": result.has_conflict,
-            "hyde_used": getattr(ctx.context.processed_query, "hypothetical_doc", None)
-            is not None,
+            "has_conflict":      result.has_conflict,
         },
     )
 
     return json.dumps({
-        "answer": result.answer,
-        "citations": [c.get("chunk_id") for c in result.citations],
+        "answer":             result.answer,
+        "citations":          result.citations,   # full objects: number, chunk_id, source_name, ingestion_ts, excerpt
         "faithfulness_score": result.faithfulness_score,
-        "has_conflict": result.has_conflict,
+        "has_conflict":       result.has_conflict,
     })
-
-
-
-

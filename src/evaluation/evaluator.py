@@ -27,7 +27,6 @@ logger = get_logger(__name__)
 
 _RAGAS_METRICS = [faithfulness, answer_relevancy, context_precision, context_recall]
 
-
 @dataclass
 class RetrievalMetrics:
     recall_at_k: float = 0.0
@@ -36,12 +35,10 @@ class RetrievalMetrics:
     context_precision: float = 0.0
     context_recall: float = 0.0
 
-
 @dataclass
 class GenerationMetrics:
     faithfulness: float = 0.0
     answer_relevancy: float = 0.0
-
 
 @dataclass
 class EvaluationReport:
@@ -53,11 +50,9 @@ class EvaluationReport:
     custom_judge_scores: Dict[str, float] = field(default_factory=dict)
     overall_score: float = 0.0
 
-
 def _avg(values: List[float]) -> float:
     valid = [v for v in values if v is not None]
     return sum(valid) / len(valid) if valid else 0.0
-
 
 def _reset_ragas_state(metrics) -> None:
     for m in metrics:
@@ -65,7 +60,6 @@ def _reset_ragas_state(metrics) -> None:
             m.llm = None
         if hasattr(m, "embeddings"):
             m.embeddings = None
-
 
 def _report_from_scores(query: str, answer: str, scores: Dict[str, float]) -> EvaluationReport:
     report = EvaluationReport(query=query, answer=answer)
@@ -76,7 +70,6 @@ def _report_from_scores(query: str, answer: str, scores: Dict[str, float]) -> Ev
     report.retrieval.context_recall = scores.get("context_recall", 0.0)
     report.overall_score = _avg(list(scores.values()))
     return report
-
 
 def _log_batch_summary(report: EvaluationReport) -> None:
     logger.info(
@@ -94,7 +87,6 @@ def _log_batch_summary(report: EvaluationReport) -> None:
         report.overall_score,
         "=" * 50,
     )
-
 
 class RAGEvaluator:
     def __init__(self) -> None:
@@ -120,7 +112,6 @@ class RAGEvaluator:
         self._reference_embeddings: List[np.ndarray] = []
         self._reference_window = self._eval_cfg["drift_detection"]["reference_window"]
 
-
     def evaluate_online(
         self,
         query: str,
@@ -142,7 +133,6 @@ class RAGEvaluator:
             return report
 
         return self.evaluate_with_ragas(query, answer, context_texts, ground_truth)
-
 
     def _run_ragas(
         self,
@@ -225,7 +215,6 @@ class RAGEvaluator:
 
         return reports
 
-
     def evaluate_with_custom_judge(
         self,
         query: str,
@@ -271,7 +260,6 @@ class RAGEvaluator:
 
         return report
 
-
     def generate_synthetic_qa(self, chunk_text: str, n: int = 3) -> List[Dict[str, str]]:
         prompt = (
             f"Generate {n} diverse, specific question-answer pairs from the passage below. "
@@ -303,7 +291,6 @@ class RAGEvaluator:
                 })
         return samples
 
-
     def evaluate_retrieval(
         self,
         retrieved_ids: List[str],
@@ -333,7 +320,6 @@ class RAGEvaluator:
         metrics = RetrievalMetrics(recall_at_k=recall_at_k, ndcg=ndcg, mrr=mrr)
         logger.info("Retrieval metrics: recall@%d=%.3f NDCG=%.3f MRR=%.3f", k, recall_at_k, ndcg, mrr)
         return metrics
-
 
     def update_reference_distribution(self, query_embedding: np.ndarray) -> None:
         self._reference_embeddings.append(query_embedding)

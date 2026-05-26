@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-05-24T16:39:24.931845",
+  "query": "what is MDLC",
+  "reason": "No relevant context found",
+  "conversation_history": [
+    {
+      "role": "user",
+      "content": "what is moca"
+    },
+    {
+      "role": "assistant",
+      "content": "The MoCA, or Montreal Cognitive Assessment, is used as a reference standard comparison test in the study described in the context. It is implied to be a cognitive screening measure, although the specific details about the test itself are not provided in the context [1]."
+    }
+  ]
+}

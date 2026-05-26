@@ -1,17 +1,16 @@
 
 from __future__ import annotations
 
-import hashlib                                  
+import hashlib
 from typing import Dict, List, Set
 
 from datasketch import MinHash, MinHashLSH
 
-from src.config.settings import get_config         
-from src.ingestion.parser import ParsedChunk       
-from src.utils.logger import get_logger            
+from src.config.settings import get_config
+from src.ingestion.parser import ParsedChunk
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
 
 class Deduplicator:
     """
@@ -20,7 +19,7 @@ class Deduplicator:
 
     def __init__(self) -> None:
         cfg = get_config()
-        self._dedup_cfg = cfg.ingestion["deduplication"] 
+        self._dedup_cfg = cfg.ingestion["deduplication"]
 
         self._num_perm: int = self._dedup_cfg["minhash_num_perm"]
         self._threshold: float = self._dedup_cfg["jaccard_threshold"]
@@ -29,31 +28,30 @@ class Deduplicator:
         self._exact_hashes: Set[str] = set()
 
         self._lsh = MinHashLSH(
-            threshold=self._threshold,             
-            num_perm=self._num_perm,            
+            threshold=self._threshold,
+            num_perm=self._num_perm,
         )
-        self._lsh_registry: Dict[str, tuple[ParsedChunk, MinHash]] = {} 
-
+        self._lsh_registry: Dict[str, tuple[ParsedChunk, MinHash]] = {}
 
     def filter(self, chunks: List[ParsedChunk]) -> List[ParsedChunk]:
         """
         Deduplicate a batch of chunks using exact and MinHash matching.
         """
         if not self._dedup_cfg["enabled"]:
-            return chunks                         
+            return chunks
 
-        unique: List[ParsedChunk] = []             
-        duplicates_exact = 0                       
+        unique: List[ParsedChunk] = []
+        duplicates_exact = 0
         duplicates_fuzzy = 0
 
         for chunk in chunks:
-            
+
             norm_text = self._normalize(chunk.text)
             exact_hash = self._compute_exact_hash(norm_text)
             if exact_hash in self._exact_hashes:
                 duplicates_exact += 1
                 logger.debug(f"Exact duplicate skipped: {chunk.chunk_id}")
-                continue                            
+                continue
 
             minhash = self._compute_minhash(norm_text)
             similar_keys: List[str] = self._lsh.query(minhash)
@@ -68,14 +66,14 @@ class Deduplicator:
                     )
                     continue
 
-            self._exact_hashes.add(exact_hash)    
-            lsh_key = chunk.chunk_id or exact_hash  
+            self._exact_hashes.add(exact_hash)
+            lsh_key = chunk.chunk_id or exact_hash
             try:
                 self._lsh.insert(lsh_key, minhash)
             except ValueError:
-                pass                          
+                pass
             self._lsh_registry[lsh_key] = (chunk, minhash)
-            unique.append(chunk)                  
+            unique.append(chunk)
 
         logger.info(
             f"Deduplication complete: {len(unique)} unique, "
@@ -83,11 +81,10 @@ class Deduplicator:
         )
         return unique
 
-
     @staticmethod
     def _normalize(text: str) -> str:
         return " ".join(text.lower().split())
-    
+
     @staticmethod
     def _compute_exact_hash(text: str) -> str:
         """SHA-256 hash of normalized text."""
@@ -97,12 +94,12 @@ class Deduplicator:
         """
         MinHash signature using character 3-grams.
         """
-        mh = MinHash(num_perm=self._num_perm)     
+        mh = MinHash(num_perm=self._num_perm)
         shingles = self._shingle(text, k=3)
         for shingle in shingles:
-            mh.update(shingle.encode("utf-8"))  
+            mh.update(shingle.encode("utf-8"))
         return mh
-    
+
     @staticmethod
     def _shingle(text: str, k: int = 3) -> Set[str]:
         """
@@ -120,10 +117,10 @@ class Deduplicator:
         existing_chunks = [
             self._lsh_registry[k]
             for k in existing_keys
-            if k in self._lsh_registry       
+            if k in self._lsh_registry
         ]
         if not existing_chunks:
-            return incoming                     
+            return incoming
 
         strategy = self._keep_strategy
         if strategy == "newest":

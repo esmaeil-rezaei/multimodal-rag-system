@@ -18,8 +18,6 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-
-
 # Matches an ATX heading
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
@@ -33,7 +31,6 @@ _ABBREV = re.compile(
 # or digit/quote/bracket.  Fixed-width lookbehind only — Python re compatible.
 _CANDIDATE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])")
 
-
 def _is_sentence_boundary(left: str) -> bool:
     """
     Check whether a candidate split is a real sentence boundary.
@@ -42,7 +39,6 @@ def _is_sentence_boundary(left: str) -> bool:
     if _ABBREV.search(left):
         return False
     return True
-
 
 def _split_on_boundaries(text: str) -> List[str]:
     """
@@ -70,7 +66,6 @@ class ChunkNode:
     level: str = "paragraph"       # document | section | paragraph
     parent_id: Optional[str] = None
     children_ids: List[str] = field(default_factory=list)
-
 
 class TextChunker:
     """
@@ -116,8 +111,6 @@ class TextChunker:
 
         return self._embedder
 
-
-
     def chunk(self, document_chunks: List[ParsedChunk]) -> List[ChunkNode]:
         """
         Accept a list of Consolidated/ParsedChunks and return a flat list of
@@ -150,7 +143,6 @@ class TextChunker:
         )
         return all_nodes
 
-
     def _fixed_chunking(self, source: ParsedChunk) -> List[ChunkNode]:
         """
         Naive token-window chunking.  Breaks sentences arbitrarily.
@@ -176,7 +168,6 @@ class TextChunker:
 
         return nodes
 
-
     def _semantic_chunking(
         self,
         source: ParsedChunk,
@@ -198,10 +189,9 @@ class TextChunker:
                 level="paragraph",
             )]
 
-
         windows = self._build_windows(sentences, window_size)
         embed   = self._get_embedder()
-        embeddings = embed(windows)  
+        embeddings = embed(windows)
 
         similarities = self._adjacent_similarities(embeddings)
 
@@ -234,8 +224,6 @@ class TextChunker:
             ))
 
         return nodes
-
-
 
     def _hierarchical_chunking(self, source: ParsedChunk) -> List[ChunkNode]:
         """
@@ -289,7 +277,6 @@ class TextChunker:
                 paragraph_nodes.append(para_node)
 
         return [document_node] + section_nodes + paragraph_nodes
-
 
     @staticmethod
     def _build_windows(sentences: List[str], window_size: int) -> List[str]:
@@ -348,7 +335,7 @@ class TextChunker:
         segments: List[str] = []
         start = 0
         for bp in sorted(set(breakpoint_indices)):
-            end = bp + 1         
+            end = bp + 1
             segment = " ".join(sentences[start:end]).strip()
             if segment:
                 segments.append(segment)
@@ -423,7 +410,6 @@ class TextChunker:
 
         return result
 
-
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
         """
@@ -474,12 +460,9 @@ class TextChunker:
         clone.chunk_id = clone.compute_fingerprint()
         return clone
 
-
-
 def _extract_heading(section_text: str) -> str:
     match = _HEADING_RE.search(section_text)
     return match.group(2).strip() if match else ""
-
 
 def _heading_depth(section_text: str) -> int:
     match = _HEADING_RE.search(section_text)

@@ -11,7 +11,6 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-
 @dataclass
 class ConsolidatedChunk:
     """
@@ -38,7 +37,6 @@ class ConsolidatedChunk:
     def chunk_id(self, value: str) -> None:
         self.metadata["chunk_id"] = value
 
-
 class ChunkConsolidator:
     """
     Merge parser-level chunks into section-level chunks.
@@ -52,7 +50,7 @@ class ChunkConsolidator:
             return []
 
         groups: Dict[str, List[ParsedChunk]] = {}
-        group_order: List[str] = []           
+        group_order: List[str] = []
 
         for chunk in parsed_chunks:
             key = self._section_key(chunk)
@@ -64,14 +62,13 @@ class ChunkConsolidator:
         consolidated: List[ConsolidatedChunk] = []
         for key in group_order:
             merged = self._merge_group(groups[key])
-            if merged.text.strip():           
+            if merged.text.strip():
                 consolidated.append(merged)
 
         logger.info(
             f"Consolidation: {len(parsed_chunks)} elements → {len(consolidated)} sections"
         )
         return consolidated
-
 
     @staticmethod
     def _section_key(chunk: ParsedChunk) -> str:
@@ -85,7 +82,6 @@ class ChunkConsolidator:
         )
 
         return f"{chunk.source_file}::{section}"
-
 
     def _merge_group(self, chunks: List[ParsedChunk]) -> ConsolidatedChunk:
         """
@@ -115,7 +111,6 @@ class ChunkConsolidator:
             element_metadata=all_metadata,
         )
 
-
     @staticmethod
     def _format_element(text: str, category: str, depth: int) -> str:
         """
@@ -140,7 +135,6 @@ class ChunkConsolidator:
 
         else:
             return text
-
 
     @staticmethod
     def _merge_metadata(all_meta: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -180,8 +174,6 @@ class ChunkConsolidator:
         merged["element_count"] = len(all_meta)
 
         return merged
-    
-
 
     @staticmethod
     def _dominant_language(chunks: List[ParsedChunk]) -> str:

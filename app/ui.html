@@ -7,8 +7,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js" defer></script>
 <style>
-
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -42,7 +43,7 @@
 
   --radius:      14px;
   --radius-sm:   8px;
-  --sidebar-w:   260px;
+  --sidebar-w:   280px;
 
   --font:        'Sora', sans-serif;
   --mono:        'JetBrains Mono', monospace;
@@ -59,6 +60,204 @@ body {
   overflow: hidden;
 }
 
+#auth-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10,13,20,0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+#auth-modal {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 20px;
+  padding: 36px 40px 32px;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.18);
+  animation: fadeUp 0.25s ease;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.auth-brand-icon {
+  width: 36px; height: 36px;
+  background: var(--accent);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+}
+.auth-brand-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+.auth-brand-name span { font-weight: 300; color: var(--text-2); }
+
+.auth-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface2);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  margin-bottom: 24px;
+}
+.auth-tab {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  background: transparent;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.auth-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.auth-form { display: flex; flex-direction: column; gap: 12px; }
+.auth-form.hidden { display: none; }
+
+.field-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+.field-group { display: flex; flex-direction: column; }
+
+.auth-input,
+.auth-select {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-family: var(--font);
+  font-size: 14px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+  appearance: none;
+}
+.auth-input:focus,
+.auth-select:focus { border-color: rgba(25,195,125,0.5); box-shadow: 0 0 0 3px var(--accent-glow); }
+.auth-input::placeholder { color: var(--text-3); }
+
+.auth-select-wrap {
+  position: relative;
+}
+.auth-select-wrap::after {
+  content: '';
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0; height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--text-3);
+  pointer-events: none;
+}
+
+.auth-lock-note {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.auth-ns-notice {
+  font-size: 12px;
+  color: var(--amber);
+  background: var(--amber-dim);
+  border: 1px solid rgba(245,158,11,0.22);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 6px;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  line-height: 1.5;
+}
+.auth-ns-notice svg { flex-shrink: 0; margin-top: 1px; }
+
+.btn-auth-submit {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 11px;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  margin-top: 4px;
+}
+.btn-auth-submit:hover { opacity: 0.88; }
+.btn-auth-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border2);
+}
+
+.btn-guest {
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  text-align: center;
+}
+.btn-guest:hover { background: var(--surface2); color: var(--text); }
+
+.auth-error {
+  font-size: 12px;
+  color: var(--red);
+  background: var(--red-dim);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: none;
+}
+.auth-error.show { display: block; }
 
 aside {
   width: var(--sidebar-w);
@@ -81,7 +280,6 @@ aside {
   gap: 10px;
   text-decoration: none;
 }
-
 .logo-icon {
   width: 32px; height: 32px;
   background: var(--accent);
@@ -89,20 +287,14 @@ aside {
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
 }
-
 .logo-icon svg { color: #000; }
-
 .logo-text {
   font-size: 15px;
   font-weight: 600;
   color: var(--text);
   letter-spacing: -0.02em;
 }
-
-.logo-text span {
-  font-weight: 300;
-  color: var(--text-2);
-}
+.logo-text span { font-weight: 300; color: var(--text-2); }
 
 .btn-new-chat {
   margin: 12px 16px 0;
@@ -131,12 +323,50 @@ aside {
   color: var(--text-3);
 }
 
+.ns-select-wrap {
+  margin: 0 16px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#namespace-select {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  padding: 8px 28px 8px 10px;
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text);
+  appearance: none;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+#namespace-select:focus { border-color: rgba(25,195,125,0.4); }
+#namespace-select:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.ns-chevron {
+  position: absolute;
+  right: 34px;
+  pointer-events: none;
+}
+.ns-chevron svg { color: var(--text-3); }
+
+.ns-lock-icon {
+  display: flex;
+  align-items: center;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
 #history-list {
   flex: 1;
   overflow-y: auto;
   padding: 0 8px 12px;
 }
-
 #history-list::-webkit-scrollbar { width: 4px; }
 #history-list::-webkit-scrollbar-track { background: transparent; }
 #history-list::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 4px; }
@@ -164,6 +394,57 @@ aside {
   padding: 12px 16px;
 }
 
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.user-avatar {
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-glow);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+.user-meta {
+  flex: 1;
+  min-width: 0;
+}
+.user-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-ns {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.btn-logout {
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-family: var(--font);
+  font-size: 11px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+.btn-logout:hover { background: var(--red-dim); color: var(--red); border-color: rgba(239,68,68,0.2); }
+
 .session-info {
   font-family: var(--mono);
   font-size: 10px;
@@ -180,7 +461,6 @@ aside {
   box-shadow: 0 0 6px var(--accent);
 }
 
-/* ── Main ────────────────────────────────────────────────────────────── */
 main {
   flex: 1;
   display: flex;
@@ -189,30 +469,25 @@ main {
   position: relative;
 }
 
-/* ── Messages area ───────────────────────────────────────────────────── */
 #messages {
   flex: 1;
   overflow-y: auto;
   padding: 0;
   scroll-behavior: smooth;
 }
-
 #messages::-webkit-scrollbar { width: 5px; }
 #messages::-webkit-scrollbar-track { background: transparent; }
 #messages::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 4px; }
 
-/* ── Empty state ─────────────────────────────────────────────────────── */
 #empty-state {
   height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0;
   padding: 40px 24px;
   text-align: center;
 }
-
 .empty-icon {
   width: 56px; height: 56px;
   background: var(--accent-dim);
@@ -221,7 +496,6 @@ main {
   display: flex; align-items: center; justify-content: center;
   margin-bottom: 20px;
 }
-
 .empty-title {
   font-size: 22px;
   font-weight: 600;
@@ -229,7 +503,6 @@ main {
   letter-spacing: -0.03em;
   margin-bottom: 8px;
 }
-
 .empty-sub {
   font-size: 14px;
   color: var(--text-2);
@@ -238,7 +511,6 @@ main {
   line-height: 1.6;
   margin-bottom: 32px;
 }
-
 .starter-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -246,7 +518,6 @@ main {
   width: 100%;
   max-width: 520px;
 }
-
 .starter-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -257,30 +528,16 @@ main {
   transition: background 0.15s, border-color 0.15s;
 }
 .starter-card:hover { background: var(--surface2); border-color: var(--border2); }
+.starter-card-label { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+.starter-card-sub { font-size: 12px; color: var(--text-2); font-weight: 300; }
 
-.starter-card-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  margin-bottom: 3px;
-}
-.starter-card-sub {
-  font-size: 12px;
-  color: var(--text-2);
-  font-weight: 300;
-}
-
-/* ── Message rows ────────────────────────────────────────────────────── */
 .msg-row {
   padding: 24px 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
 }
-
-.msg-row + .msg-row {
-  border-top: 1px solid var(--border);
-}
+.msg-row + .msg-row { border-top: 1px solid var(--border); }
 
 .msg-inner {
   width: 100%;
@@ -293,7 +550,6 @@ main {
 
 /* user message */
 .msg-row.user .msg-inner { justify-content: flex-end; }
-
 .msg-row.user .msg-bubble {
   background: var(--user-bg);
   border: 1px solid var(--border2);
@@ -317,34 +573,19 @@ main {
   font-weight: 600;
   margin-top: 2px;
 }
-.avatar.ai {
-  background: var(--accent);
-  color: #000;
-}
-.avatar.user-av {
-  background: var(--surface3);
-  color: var(--text-2);
-  font-size: 12px;
-}
+.avatar.ai  { background: var(--accent); color: #000; }
+.avatar.user-av { background: var(--surface3); color: var(--text-2); font-size: 12px; }
 
 /* assistant content */
-.msg-content-wrap {
-  flex: 1;
-  min-width: 0;
-}
-
+.msg-content-wrap { flex: 1; min-width: 0; }
 .msg-meta-top {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
+  flex-wrap: wrap;
 }
-
-.agent-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
+.agent-name { font-size: 13px; font-weight: 600; color: var(--text); }
 
 .badge {
   font-family: var(--mono);
@@ -355,20 +596,83 @@ main {
   letter-spacing: 0.03em;
   border: 1px solid transparent;
 }
-.badge-model  { background: var(--surface3); color: var(--text-2); border-color: var(--border2); }
-.badge-faith  { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-glow); }
+.badge-model    { background: var(--surface3); color: var(--text-2); border-color: var(--border2); }
+.badge-ns       { background: var(--blue-dim); color: var(--blue); border-color: rgba(59,130,246,0.2); }
+.badge-faith    { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-glow); }
 .badge-faith.low { background: var(--amber-dim); color: var(--amber); border-color: rgba(245,158,11,0.25); }
 .badge-conflict { background: var(--amber-dim); color: var(--amber); border-color: rgba(245,158,11,0.25); }
-.badge-warn   { background: var(--red-dim); color: var(--red); border-color: rgba(248,113,113,0.2); }
+.badge-warn     { background: var(--red-dim); color: var(--red); border-color: rgba(248,113,113,0.2); }
 
 .msg-answer {
   font-size: 15px;
   line-height: 1.8;
   color: var(--text);
   font-weight: 300;
-  white-space: pre-wrap;
   word-break: break-word;
 }
+
+.msg-answer p { margin: 0 0 0.75em; }
+.msg-answer p:last-child { margin-bottom: 0; }
+.msg-answer h1, .msg-answer h2, .msg-answer h3,
+.msg-answer h4, .msg-answer h5, .msg-answer h6 {
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 1.1em 0 0.45em;
+  letter-spacing: -0.02em;
+}
+.msg-answer h1 { font-size: 1.22em; }
+.msg-answer h2 { font-size: 1.1em; }
+.msg-answer h3 { font-size: 1em; }
+.msg-answer h4, .msg-answer h5, .msg-answer h6 { font-size: 0.9em; color: var(--text-2); }
+.msg-answer ul, .msg-answer ol { margin: 0.55em 0 0.75em 1.4em; padding: 0; }
+.msg-answer li { margin-bottom: 0.28em; line-height: 1.7; }
+.msg-answer code {
+  font-family: var(--mono);
+  font-size: 0.84em;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 0.12em 0.42em;
+}
+.msg-answer pre {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+.msg-answer pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.83em;
+  line-height: 1.65;
+}
+.msg-answer blockquote {
+  border-left: 3px solid var(--accent-glow);
+  margin: 0.75em 0;
+  padding: 3px 14px;
+  color: var(--text-2);
+  font-style: italic;
+}
+.msg-answer table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.75em 0;
+  font-size: 13px;
+}
+.msg-answer th, .msg-answer td {
+  border: 1px solid var(--border2);
+  padding: 6px 10px;
+  text-align: left;
+}
+.msg-answer th { background: var(--surface2); font-weight: 600; }
+.msg-answer a { color: var(--accent); text-decoration: underline;
+  text-decoration-color: rgba(25,195,125,0.4); }
+.msg-answer hr { border: none; border-top: 1px solid var(--border2); margin: 1em 0; }
+.msg-answer strong { font-weight: 600; }
+.msg-answer em { font-style: italic; }
 
 /* conflict notice */
 .conflict-block {
@@ -382,7 +686,6 @@ main {
   line-height: 1.5;
 }
 
-/* citations */
 .citations-block {
   margin-top: 16px;
   padding: 12px 14px;
@@ -406,15 +709,67 @@ main {
   font-size: 11px;
   color: var(--text-2);
   line-height: 1.5;
-  padding: 3px 0;
+  padding: 4px 0;
 }
-.cite-index {
-  color: var(--accent);
-  flex-shrink: 0;
-  min-width: 18px;
-}
+.cite-index { color: var(--accent); flex-shrink: 0; min-width: 18px; }
 
-/* feedback */
+/* chunk hover reference */
+.chunk-ref {
+  color: var(--accent);
+  border-bottom: 1px dotted rgba(25,195,125,0.5);
+  cursor: pointer;
+  transition: color 0.12s;
+  white-space: nowrap;
+}
+.chunk-ref:hover { color: #0ea06a; }
+
+#chunk-tooltip {
+  position: fixed;
+  z-index: 2000;
+  max-width: 460px;
+  min-width: 240px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.14);
+  pointer-events: auto;
+  display: none;
+}
+#chunk-tooltip-header {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#chunk-tooltip-close {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-3);
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.12s;
+}
+#chunk-tooltip-close:hover { color: var(--text); }
+#chunk-tooltip-body {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+#chunk-tooltip-body::-webkit-scrollbar { width: 3px; }
+#chunk-tooltip-body::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 4px; }
+
 .feedback-bar {
   display: flex;
   align-items: center;
@@ -422,9 +777,7 @@ main {
   margin-top: 16px;
   flex-wrap: wrap;
 }
-
 .fb-label { font-size: 12px; color: var(--text-3); margin-right: 2px; }
-
 .fb-btn {
   display: flex;
   align-items: center;
@@ -439,31 +792,43 @@ main {
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
-.fb-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--border2); }
+.fb-btn:hover { background: var(--surface2); color: var(--text); }
 .fb-btn:disabled { opacity: 0.4; cursor: default; }
 .fb-btn.active-like    { background: var(--accent-dim); border-color: var(--accent-glow); color: var(--accent); }
-.fb-btn.active-dislike { background: var(--red-dim);    border-color: rgba(248,113,113,0.25); color: var(--red); }
-.fb-btn.active-unknown { background: var(--amber-dim);  border-color: rgba(245,158,11,0.25); color: var(--amber); }
+.fb-btn.active-dislike { background: var(--red-dim); border-color: rgba(248,113,113,0.25); color: var(--red); }
+.fb-btn.active-unknown { background: var(--amber-dim); border-color: rgba(245,158,11,0.25); color: var(--amber); }
+.fb-saved { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--accent); margin-left: 4px; }
 
-.fb-saved {
+.btn-copy {
   display: flex;
   align-items: center;
   gap: 5px;
+  margin-left: auto;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  font-family: var(--font);
   font-size: 12px;
-  color: var(--accent);
-  margin-left: 4px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+}
+.btn-copy:hover { background: var(--surface2); color: var(--text-2); }
+.btn-copy.copied { color: var(--accent); border-color: var(--accent-glow); background: var(--accent-dim); }
+
+.msg-ts {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-3);
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 /* dislike comment */
-.comment-wrap {
-  display: none;
-  margin-top: 10px;
-  gap: 8px;
-  flex-direction: column;
-  animation: fadeUp 0.2s ease;
-}
+.comment-wrap { display: none; margin-top: 10px; gap: 8px; flex-direction: column; animation: fadeUp 0.2s ease; }
 .comment-wrap.open { display: flex; }
-
 .comment-wrap textarea {
   background: var(--surface2);
   border: 1px solid var(--border2);
@@ -479,7 +844,6 @@ main {
 }
 .comment-wrap textarea:focus { border-color: var(--accent-glow); }
 .comment-wrap textarea::placeholder { color: var(--text-3); }
-
 .btn-send-comment {
   align-self: flex-end;
   background: var(--accent);
@@ -495,11 +859,7 @@ main {
 }
 .btn-send-comment:hover { opacity: 0.85; }
 
-/* ── Thinking indicator ──────────────────────────────────────────────── */
-.thinking-row {
-  padding: 20px 0;
-  border-top: 1px solid var(--border);
-}
+.thinking-row { padding: 20px 0; border-top: 1px solid var(--border); }
 .thinking-inner {
   width: 100%;
   max-width: 740px;
@@ -509,11 +869,7 @@ main {
   gap: 16px;
   align-items: center;
 }
-.thinking-dots {
-  display: flex;
-  gap: 5px;
-  align-items: center;
-}
+.thinking-dots { display: flex; gap: 5px; align-items: center; }
 .thinking-dots span {
   width: 7px; height: 7px;
   border-radius: 50%;
@@ -528,19 +884,12 @@ main {
   40% { opacity: 1; transform: scale(1); }
 }
 
-/* ── Input area ──────────────────────────────────────────────────────── */
 #input-area {
   border-top: 1px solid var(--border);
   background: var(--bg);
   padding: 16px 0 20px;
 }
-
-.input-inner {
-  max-width: 740px;
-  margin: 0 auto;
-  padding: 0 32px;
-}
-
+.input-inner { max-width: 740px; margin: 0 auto; padding: 0 32px; }
 .input-box {
   background: var(--surface);
   border: 1px solid var(--border2);
@@ -555,7 +904,6 @@ main {
   border-color: rgba(25,195,125,0.35);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
-
 #query-input {
   flex: 1;
   background: transparent;
@@ -571,7 +919,6 @@ main {
   padding: 0;
 }
 #query-input::placeholder { color: var(--text-3); }
-
 .btn-send {
   width: 36px; height: 36px;
   background: var(--accent);
@@ -586,36 +933,93 @@ main {
 .btn-send:hover { opacity: 0.88; }
 .btn-send:active { transform: scale(0.93); }
 .btn-send:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
-
-.input-hint {
-  font-size: 11px;
-  color: var(--text-3);
-  margin-top: 8px;
-  text-align: center;
-}
+.input-hint { font-size: 11px; color: var(--text-3); margin-top: 8px; text-align: center; }
 
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Scrollbar global ────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 4px; }
 
-/* ── Responsive ──────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
   aside { display: none; }
   .msg-inner, .thinking-inner, .input-inner { padding: 0 16px; }
   .starter-grid { grid-template-columns: 1fr; }
   .msg-row.user .msg-bubble { max-width: 90%; }
+  #auth-modal { padding: 28px 24px; }
 }
 </style>
 </head>
 <body>
 
-<!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+<div id="auth-overlay">
+  <div id="auth-modal">
+    <div class="auth-brand">
+      <div class="auth-brand-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+      </div>
+      <span class="auth-brand-name">RAG<span>·assist</span></span>
+    </div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-login" onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab" id="tab-register" onclick="switchTab('register')">Create Account</button>
+    </div>
+
+    <!-- Login form -->
+    <div id="form-login" class="auth-form">
+      <div class="field-group">
+        <div class="field-label">Username</div>
+        <input id="login-username" class="auth-input" type="text" placeholder="your username" autocomplete="username" />
+      </div>
+      <div class="field-group">
+        <div class="field-label">Password</div>
+        <input id="login-password" class="auth-input" type="password" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+      <div id="login-error" class="auth-error"></div>
+      <button class="btn-auth-submit" id="btn-login" onclick="doLogin()">Sign In</button>
+    </div>
+
+    <!-- Register form -->
+    <div id="form-register" class="auth-form hidden">
+      <div class="field-group">
+        <div class="field-label">Username</div>
+        <input id="reg-username" class="auth-input" type="text" placeholder="choose a username" autocomplete="username" />
+      </div>
+      <div class="field-group">
+        <div class="field-label">Password</div>
+        <input id="reg-password" class="auth-input" type="password" placeholder="min. 6 characters" autocomplete="new-password" />
+      </div>
+      <div class="field-group">
+        <div class="field-label">Model (Knowledge Base)</div>
+        <div class="auth-select-wrap">
+          <select id="reg-namespace" class="auth-select">
+            <option value="">Loading…</option>
+          </select>
+        </div>
+        <div id="reg-ns-notice" class="auth-ns-notice" style="display:none">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          No knowledge base namespaces are available yet. Ask your administrator to ingest data first.
+        </div>
+        <div id="reg-ns-lock-note" class="auth-lock-note">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          This selection is permanent and cannot be changed later.
+        </div>
+      </div>
+      <div id="reg-error" class="auth-error"></div>
+      <button class="btn-auth-submit" id="btn-register" onclick="doRegister()">Create Account</button>
+    </div>
+
+    <div class="auth-divider">or</div>
+    <button class="btn-guest" onclick="continueAsGuest()">Continue as Guest — select any model</button>
+  </div>
+</div>
+
 <aside>
   <div class="sidebar-header">
     <a class="logo" href="#">
@@ -633,21 +1037,42 @@ main {
     New conversation
   </button>
 
+  <div class="sidebar-section-label">Model</div>
+  <div class="ns-select-wrap">
+    <select id="namespace-select">
+      <option value="">All namespaces</option>
+    </select>
+    <span class="ns-chevron">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+    </span>
+    <span class="ns-lock-icon" id="ns-lock" style="display:none" title="Model locked to your account">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    </span>
+  </div>
+
   <div class="sidebar-section-label">Recent</div>
   <div id="history-list"></div>
 
   <div class="sidebar-footer">
-    <div class="session-info">
+    <!-- Shown for logged-in users -->
+    <div class="user-info" id="user-info-bar" style="display:none">
+      <div class="user-avatar" id="user-avatar-initials">U</div>
+      <div class="user-meta">
+        <div class="user-name" id="user-display-name">—</div>
+        <div class="user-ns" id="user-display-ns">—</div>
+      </div>
+      <button class="btn-logout" onclick="logout()">Sign out</button>
+    </div>
+    <!-- Shown for guests -->
+    <div class="session-info" id="guest-info-bar">
       <div class="session-dot"></div>
-      <span id="session-id-display">—</span>
+      <span id="session-id-display">Guest session</span>
     </div>
   </div>
 </aside>
 
-<!-- ── Main ───────────────────────────────────────────────────────── -->
 <main>
   <div id="messages">
-    <!-- Empty state -->
     <div id="empty-state">
       <div class="empty-icon">
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#19c37d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -677,7 +1102,6 @@ main {
     </div>
   </div>
 
-  <!-- Input -->
   <div id="input-area">
     <div class="input-inner">
       <div class="input-box">
@@ -693,16 +1117,198 @@ main {
   </div>
 </main>
 
+<div id="chunk-tooltip">
+  <div id="chunk-tooltip-header">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    <span id="chunk-tooltip-id">chunk preview</span>
+    <button id="chunk-tooltip-close" onclick="closeChunkTooltip()" title="Close">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div id="chunk-tooltip-body">Click a source reference to preview the chunk.</div>
+</div>
+
 <script>
-/* ── Session ─────────────────────────────────────────────────────────── */
-const SESSION_ID = 'sess-' + Math.random().toString(36).slice(2, 9);
-document.getElementById('session-id-display').textContent = SESSION_ID;
+const LS_TOKEN = 'rag_auth_token';
+let _authToken     = null;   // JWT string or null
+let _authUser      = null;   // { username, namespace }
+let _isGuest       = false;
+const SESSION_ID   = 'sess-' + Math.random().toString(36).slice(2, 9);
 
-/* ── Answer store (query_id → {question, answer}) ────────────────────── */
-// Avoids unsafe inline JS with embedded answer strings
+function _decodeJwt(token) {
+  try {
+    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+  } catch { return null; }
+}
+
+function _isExpired(token) {
+  const p = _decodeJwt(token);
+  return !p || (Date.now() / 1000 > p.exp);
+}
+
+(async function init() {
+  await loadNamespaces();
+
+  const saved = localStorage.getItem(LS_TOKEN);
+  if (saved && !_isExpired(saved)) {
+    const p = _decodeJwt(saved);
+    _applyLogin(saved, p.sub, p.namespace);
+  } else {
+    localStorage.removeItem(LS_TOKEN);
+    document.getElementById('session-id-display').textContent = SESSION_ID;
+  }
+})();
+
+async function loadNamespaces() {
+  try {
+    const res  = await fetch('/namespaces');
+    const data = await res.json();
+    const ns   = data.namespaces || [];
+
+    // Populate sidebar dropdown
+    const sel = document.getElementById('namespace-select');
+    sel.innerHTML = '<option value="">All namespaces</option>' +
+      ns.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+
+    // Populate register form dropdown
+    const regSel    = document.getElementById('reg-namespace');
+    const notice    = document.getElementById('reg-ns-notice');
+    const lockNote  = document.getElementById('reg-ns-lock-note');
+    const btnReg    = document.getElementById('btn-register');
+
+    if (ns.length) {
+      regSel.innerHTML = ns.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+      notice.style.display   = 'none';
+      lockNote.style.display = 'flex';
+      btnReg.disabled        = false;
+    } else {
+      regSel.innerHTML       = '<option value="">— none available —</option>';
+      notice.style.display   = 'flex';
+      lockNote.style.display = 'none';
+      btnReg.disabled        = true;
+    }
+  } catch {
+    // Non-fatal — leave placeholder; don't block the UI
+  }
+}
+
+function switchTab(tab) {
+  document.getElementById('form-login').classList.toggle('hidden', tab !== 'login');
+  document.getElementById('form-register').classList.toggle('hidden', tab !== 'register');
+  document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+  document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+  document.getElementById('login-error').classList.remove('show');
+  document.getElementById('reg-error').classList.remove('show');
+}
+
+async function doLogin() {
+  const btn      = document.getElementById('btn-login');
+  const errEl    = document.getElementById('login-error');
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  errEl.classList.remove('show');
+
+  if (!username || !password) { _showErr(errEl, 'Please fill in all fields.'); return; }
+
+  btn.disabled = true;
+  try {
+    const res  = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) { _showErr(errEl, data.detail || 'Login failed.'); return; }
+    _applyLogin(data.token, data.username, data.namespace);
+  } catch { _showErr(errEl, 'Network error — please try again.'); }
+  finally  { btn.disabled = false; }
+}
+
+async function doRegister() {
+  const btn       = document.getElementById('btn-register');
+  const errEl     = document.getElementById('reg-error');
+  const username  = document.getElementById('reg-username').value.trim();
+  const password  = document.getElementById('reg-password').value;
+  const namespace = document.getElementById('reg-namespace').value;
+  errEl.classList.remove('show');
+
+  if (!namespace) { _showErr(errEl, 'No knowledge base is available. Please ask your administrator to ingest data first.'); return; }
+  if (!username || !password) { _showErr(errEl, 'Please fill in all fields.'); return; }
+
+  btn.disabled = true;
+  try {
+    const res  = await fetch('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, namespace }),
+    });
+    const data = await res.json();
+    if (!res.ok) { _showErr(errEl, data.detail || 'Registration failed.'); return; }
+    _applyLogin(data.token, data.username, data.namespace);
+  } catch { _showErr(errEl, 'Network error — please try again.'); }
+  finally  { btn.disabled = false; }
+}
+
+function continueAsGuest() {
+  _isGuest = true;
+  document.getElementById('auth-overlay').style.display = 'none';
+  document.getElementById('guest-info-bar').style.display = 'flex';
+  document.getElementById('user-info-bar').style.display  = 'none';
+  document.getElementById('session-id-display').textContent = SESSION_ID;
+  // Guest can freely pick namespace — dropdown stays enabled
+}
+
+function _applyLogin(token, username, namespace) {
+  _authToken = token;
+  _authUser  = { username, namespace };
+  localStorage.setItem(LS_TOKEN, token);
+
+  // Hide modal
+  document.getElementById('auth-overlay').style.display = 'none';
+
+  // Sidebar: lock namespace dropdown to user's namespace
+  const sel = document.getElementById('namespace-select');
+  sel.value = namespace;
+  sel.disabled = true;
+  document.getElementById('ns-lock').style.display = 'flex';
+
+  // Sidebar footer: show user info
+  document.getElementById('user-info-bar').style.display    = 'flex';
+  document.getElementById('guest-info-bar').style.display   = 'none';
+  document.getElementById('user-display-name').textContent  = username;
+  document.getElementById('user-display-ns').textContent    = `ns: ${namespace}`;
+  document.getElementById('user-avatar-initials').textContent = username.slice(0, 2).toUpperCase();
+}
+
+function logout() {
+  _authToken = null;
+  _authUser  = null;
+  _isGuest   = false;
+  localStorage.removeItem(LS_TOKEN);
+  // Re-enable namespace selector
+  const sel = document.getElementById('namespace-select');
+  sel.disabled = false;
+  document.getElementById('ns-lock').style.display = 'none';
+  // Show modal again
+  document.getElementById('auth-overlay').style.display = 'flex';
+  document.getElementById('login-error').classList.remove('show');
+  document.getElementById('reg-error').classList.remove('show');
+  document.getElementById('login-password').value = '';
+}
+
+function _showErr(el, msg) {
+  el.textContent = msg;
+  el.classList.add('show');
+}
+
+document.getElementById('login-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+document.getElementById('reg-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doRegister();
+});
+
 const _answerStore = {};
-
-/* ── History ─────────────────────────────────────────────────────────── */
 const _historyItems = [];
 
 function addToHistory(question, queryId) {
@@ -722,7 +1328,11 @@ function renderHistory() {
   `).join('');
 }
 
-/* ── Input auto-resize ───────────────────────────────────────────────── */
+// reset conversation when a guest switches model
+document.getElementById('namespace-select').addEventListener('change', () => {
+  if (!_authToken) newChat();   /* no-op for auth'd users — select is disabled */
+});
+
 const textarea = document.getElementById('query-input');
 textarea.addEventListener('input', () => {
   textarea.style.height = 'auto';
@@ -740,22 +1350,41 @@ function useStarter(el) {
 
 function newChat() {
   fetch(`/session/${SESSION_ID}`, { method: 'DELETE' }).catch(() => {});
-  document.getElementById('messages').innerHTML = '';
-  document.getElementById('messages').appendChild(buildEmptyState());
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML = '';
+  const es = document.createElement('div');
+  es.id = 'empty-state';
+  es.innerHTML = `
+    <div class="empty-icon">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#19c37d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+    </div>
+    <div class="empty-title">Ask your knowledge base</div>
+    <div class="empty-sub">Query the RAG pipeline — grounded answers with citations, conflict detection, and feedback tracking.</div>
+    <div class="starter-grid">
+      <div class="starter-card" onclick="useStarter(this)">
+        <div class="starter-card-label">Main topics</div>
+        <div class="starter-card-sub">What are the main topics covered?</div>
+      </div>
+      <div class="starter-card" onclick="useStarter(this)">
+        <div class="starter-card-label">Key findings</div>
+        <div class="starter-card-sub">List the key findings from recent documents</div>
+      </div>
+      <div class="starter-card" onclick="useStarter(this)">
+        <div class="starter-card-label">Compare sources</div>
+        <div class="starter-card-sub">Compare and contrast the available sources</div>
+      </div>
+      <div class="starter-card" onclick="useStarter(this)">
+        <div class="starter-card-label">Summarize</div>
+        <div class="starter-card-sub">Summarize the most recent document</div>
+      </div>
+    </div>`;
+  msgs.appendChild(es);
   _historyItems.length = 0;
   renderHistory();
 }
 
-function buildEmptyState() {
-  // Re-create empty state without duplicating HTML
-  const d = document.createElement('div');
-  d.id = 'empty-state';
-  d.innerHTML = document.getElementById('empty-state')?.outerHTML
-    ? document.getElementById('empty-state').innerHTML : '';
-  return d;
-}
-
-/* ── Submit ──────────────────────────────────────────────────────────── */
 async function submitQuery() {
   const q = textarea.value.trim();
   if (!q) return;
@@ -769,18 +1398,26 @@ async function submitQuery() {
 
   const btn = document.getElementById('send-btn');
   btn.disabled = true;
-
   const thinkingEl = appendThinking();
+
+  // Resolve namespace and token for this request
+  const selectedNs = document.getElementById('namespace-select').value || null;
+
+  const body = {
+    question:   q,
+    session_id: SESSION_ID,
+    namespace:  _authToken ? null       : selectedNs,   // guests send explicit ns
+    token:      _authToken ? _authToken : null,         // logged-in users send token
+  };
 
   try {
     const res = await fetch('/query', {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: q, session_id: SESSION_ID }),
+      body:    JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Server error ${res.status}`);
     const data = await res.json();
-
     thinkingEl.remove();
     appendAssistantMessage(data, q);
     addToHistory(q, data.query_id);
@@ -794,7 +1431,6 @@ async function submitQuery() {
   }
 }
 
-/* ── Render helpers ──────────────────────────────────────────────────── */
 function scrollToBottom() {
   const msgs = document.getElementById('messages');
   msgs.scrollTo({ top: msgs.scrollHeight, behavior: 'smooth' });
@@ -802,68 +1438,75 @@ function scrollToBottom() {
 
 function appendUserMessage(text) {
   const msgs = document.getElementById('messages');
-  const row = document.createElement('div');
+  const row  = document.createElement('div');
   row.className = 'msg-row user';
   row.innerHTML = `
     <div class="msg-inner">
       <div class="msg-bubble">${esc(text)}</div>
       <div class="avatar user-av">U</div>
-    </div>
-  `;
+    </div>`;
   msgs.appendChild(row);
   scrollToBottom();
 }
 
 function appendThinking() {
   const msgs = document.getElementById('messages');
-  const row = document.createElement('div');
+  const row  = document.createElement('div');
   row.className = 'thinking-row';
   row.innerHTML = `
     <div class="thinking-inner">
       <div class="avatar ai">R</div>
       <div class="thinking-dots"><span></span><span></span><span></span></div>
-    </div>
-  `;
+    </div>`;
   msgs.appendChild(row);
   scrollToBottom();
   return row;
 }
 
 function appendAssistantMessage(data, question) {
-  // Store for safe feedback retrieval
   _answerStore[data.query_id] = { question, answer: data.answer };
 
   const msgs = document.getElementById('messages');
-  const row = document.createElement('div');
+  const row  = document.createElement('div');
   row.className = 'msg-row assistant';
   row.id = 'msg-' + data.query_id;
 
+  /* timestamp */
+  const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
   /* badges */
   let badges = `<span class="badge badge-model">${esc(data.model_used)}</span>`;
+  if (data.namespace_used && data.namespace_used !== 'default') {
+    badges += `<span class="badge badge-ns">${esc(data.namespace_used)}</span>`;
+  }
   if (data.faithfulness_score != null) {
     const pct = (data.faithfulness_score * 100).toFixed(0);
     const low = data.faithfulness_score < 0.5 ? ' low' : '';
     badges += `<span class="badge badge-faith${low}">⬡ ${pct}% faithful</span>`;
   }
-  if (data.has_conflict)      badges += `<span class="badge badge-conflict">⚡ conflict</span>`;
-  if (data.could_not_answer)  badges += `<span class="badge badge-warn">⚠ uncertain</span>`;
+  if (data.has_conflict)     badges += `<span class="badge badge-conflict">⚡ conflict</span>`;
+  if (data.could_not_answer) badges += `<span class="badge badge-warn">⚠ uncertain</span>`;
 
-  /* citations */
+  /* citations with hoverable chunk IDs */
   let citationsHtml = '';
   if (data.citations && data.citations.length) {
-    const rows = data.citations.map((c, i) => {
-      const src = c.source_name || c.source_file || 'unknown';
-      const ts  = (c.ingestion_ts || '').slice(0, 10);
-      const id  = (c.chunk_id    || '').slice(0, 8);
+    const citRows = data.citations.map((c, i) => {
+      const fullId  = c.chunk_id || '';
+      const shortId = fullId.slice(0, 8);
+      const src     = c.source_name || c.source_file || 'unknown';
+      const date    = (c.ingestion_ts || '').slice(0, 10);
       return `<div class="cite-row">
         <span class="cite-index">[${i + 1}]</span>
-        <span>${esc(id)}… · ${esc(src)}${ts ? ' · ' + esc(ts) : ''}</span>
+        <span>
+          <span class="chunk-ref" data-chunk-id="${esc(fullId)}" title="Hover to preview chunk">${esc(shortId)}…</span>
+          <span style="color:var(--text-3)"> · </span>${esc(src)}${date ? `<span style="color:var(--text-3)"> · </span>${esc(date)}` : ''}
+        </span>
       </div>`;
     }).join('');
     citationsHtml = `
       <div class="citations-block">
         <div class="citations-label">Sources · ${data.citations.length}</div>
-        ${rows}
+        ${citRows}
       </div>`;
   }
 
@@ -875,8 +1518,11 @@ function appendAssistantMessage(data, question) {
     <div class="msg-inner">
       <div class="avatar ai">R</div>
       <div class="msg-content-wrap">
-        <div class="msg-meta-top">${badges}</div>
-        <div class="msg-answer">${esc(data.answer)}</div>
+        <div class="msg-meta-top">
+          ${badges}
+          <span class="msg-ts">${esc(ts)}</span>
+        </div>
+        <div class="msg-answer" id="answer-${data.query_id}"></div>
         ${conflictHtml}
         ${citationsHtml}
         <div class="feedback-bar" id="fb-bar-${data.query_id}">
@@ -887,6 +1533,14 @@ function appendAssistantMessage(data, question) {
             onclick="openComment('${data.query_id}')">👎 No</button>
           <button class="fb-btn" id="fb-unknown-${data.query_id}"
             onclick="handleFeedback('${data.query_id}', 'unknown')">🤷 Can't tell</button>
+          <button class="btn-copy" id="btn-copy-${data.query_id}"
+            onclick="copyResponse('${data.query_id}')" title="Copy answer to clipboard">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            Copy
+          </button>
         </div>
         <div class="comment-wrap" id="comment-wrap-${data.query_id}">
           <textarea id="comment-text-${data.query_id}"
@@ -895,15 +1549,18 @@ function appendAssistantMessage(data, question) {
             onclick="submitDislike('${data.query_id}')">Send feedback</button>
         </div>
       </div>
-    </div>
-  `;
+    </div>`;
 
   msgs.appendChild(row);
+
+  /* Render markdown after the element is in the DOM */
+  const answerEl = document.getElementById('answer-' + data.query_id);
+  if (answerEl) answerEl.innerHTML = renderMarkdown(data.answer);
 }
 
 function appendErrorMessage(msg) {
   const msgs = document.getElementById('messages');
-  const row = document.createElement('div');
+  const row  = document.createElement('div');
   row.className = 'msg-row assistant';
   row.innerHTML = `
     <div class="msg-inner">
@@ -911,12 +1568,78 @@ function appendErrorMessage(msg) {
       <div class="msg-content-wrap">
         <div class="msg-answer" style="color:var(--red)">Error: ${esc(msg)}</div>
       </div>
-    </div>
-  `;
+    </div>`;
   msgs.appendChild(row);
 }
 
-/* ── Feedback ────────────────────────────────────────────────────────── */
+const _chunkCache = {};
+let _activeChunkId = null;
+
+function closeChunkTooltip() {
+  document.getElementById('chunk-tooltip').style.display = 'none';
+  _activeChunkId = null;
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeChunkTooltip();
+});
+
+document.addEventListener('click', async e => {
+  const trigger = e.target.closest('.chunk-ref');
+
+  /* Click outside tooltip and outside a chunk-ref → close */
+  if (!trigger && !e.target.closest('#chunk-tooltip')) {
+    closeChunkTooltip();
+    return;
+  }
+
+  if (!trigger) return;   /* click inside tooltip itself — keep open */
+
+  const chunkId = trigger.dataset.chunkId;
+  if (!chunkId) return;
+
+  /* Clicking the same ref a second time toggles the tooltip closed */
+  if (chunkId === _activeChunkId) {
+    closeChunkTooltip();
+    return;
+  }
+
+  _activeChunkId = chunkId;
+
+  const tooltip = document.getElementById('chunk-tooltip');
+  const tipId   = document.getElementById('chunk-tooltip-id');
+  const tipBody = document.getElementById('chunk-tooltip-body');
+
+  /* Position: below the clicked element, clamped to viewport */
+  const rect = trigger.getBoundingClientRect();
+  const left = Math.min(rect.left, window.innerWidth - 480);
+  tooltip.style.left    = Math.max(8, left) + 'px';
+  tooltip.style.top     = (rect.bottom + window.scrollY + 8) + 'px';
+  tooltip.style.display = 'block';
+
+  tipId.textContent = chunkId.slice(0, 16) + '…';
+
+  if (_chunkCache[chunkId]) {
+    tipBody.textContent = _chunkCache[chunkId];
+    return;
+  }
+
+  tipBody.textContent = 'Loading…';
+
+  try {
+    const res  = await fetch(`/chunk/${encodeURIComponent(chunkId)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const text = data.text || '(no text)';
+    const preview = text.length > 800 ? text.slice(0, 800) + '…' : text;
+    _chunkCache[chunkId] = preview;
+    if (_activeChunkId === chunkId) tipBody.textContent = preview;
+  } catch (err) {
+    if (_activeChunkId === chunkId)
+      tipBody.textContent = `Chunk preview unavailable. (${err.message})`;
+  }
+});
+
 function openComment(queryId) {
   document.getElementById('comment-wrap-' + queryId).classList.add('open');
   document.getElementById('fb-dislike-' + queryId).classList.add('active-dislike');
@@ -931,34 +1654,27 @@ async function submitDislike(queryId) {
 
 async function handleFeedback(queryId, rating, comment = '') {
   const stored = _answerStore[queryId];
-  if (!stored) { console.warn('No stored answer for', queryId); return; }
-
-  const payload = {
-    query_id:   queryId,
-    question:   stored.question,
-    answer:     stored.answer,
-    rating,
-    comment,
-    session_id: SESSION_ID,
-  };
+  if (!stored) return;
 
   try {
-    const res = await fetch('/feedback', {
+    await fetch('/feedback', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload),
+      body:    JSON.stringify({
+        query_id:   queryId,
+        question:   stored.question,
+        answer:     stored.answer,
+        rating,
+        comment,
+        session_id: SESSION_ID,
+      }),
     });
-    if (!res.ok) console.warn('Feedback HTTP error', res.status);
-  } catch (e) {
-    console.warn('Feedback send failed:', e);
-  }
+  } catch { /* non-fatal */ }
 
-  /* update UI */
   ['like', 'dislike', 'unknown'].forEach(r => {
     const btn = document.getElementById(`fb-${r}-${queryId}`);
     if (btn) { btn.classList.remove(`active-${r}`); btn.disabled = true; }
   });
-
   const activeBtn = document.getElementById(`fb-${rating}-${queryId}`);
   if (activeBtn) activeBtn.classList.add(`active-${rating}`);
 
@@ -971,6 +1687,34 @@ async function handleFeedback(queryId, rating, comment = '') {
   }
 }
 
+function renderMarkdown(text) {
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+    /* CDN not yet loaded — fall back to escaped plain text */
+    return '<span style="white-space:pre-wrap">' + esc(text) + '</span>';
+  }
+  try {
+    return DOMPurify.sanitize(marked.parse(text));
+  } catch {
+    return '<span style="white-space:pre-wrap">' + esc(text) + '</span>';
+  }
+}
+
+async function copyResponse(queryId) {
+  const stored = _answerStore[queryId];
+  if (!stored) return;
+  try {
+    await navigator.clipboard.writeText(stored.answer);
+    const btn = document.getElementById('btn-copy-' + queryId);
+    if (!btn) return;
+    const original = btn.innerHTML;
+    btn.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg> Copied`;
+    btn.classList.add('copied');
+    setTimeout(() => { btn.innerHTML = original; btn.classList.remove('copied'); }, 2000);
+  } catch { /* clipboard access denied — non-fatal */ }
+}
 
 function esc(s) {
   return String(s ?? '')

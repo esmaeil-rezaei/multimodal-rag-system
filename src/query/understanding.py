@@ -1,21 +1,19 @@
 
 from __future__ import annotations
 
-import re                                           
-from dataclasses import dataclass, field            
-from datetime import datetime                    
+import re
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-import spacy                                    
-import openai                                     
-from langdetect import detect as _langdetect    
+import spacy
+import openai
+from langdetect import detect as _langdetect
 
-from src.config.settings import get_config, get_secrets 
-from src.utils.logger import get_logger     
+from src.config.settings import get_config, get_secrets
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-
 
 @dataclass
 class ProcessedQuery:
@@ -23,20 +21,18 @@ class ProcessedQuery:
     The output of the query understanding stage.
     Carries the rewritten query, sub-questions, and metadata filters.
     """
-    original_query: str                             
-    expanded_query: str = ""                       
-    standalone_query: str = ""                      
-    sub_questions: List[str] = field(default_factory=list)  
-    metadata_filters: Dict[str, Any] = field(default_factory=dict)  
-    hypothetical_doc: Optional[str] = None          
-    language: Optional[str] = None          
+    original_query: str
+    expanded_query: str = ""
+    standalone_query: str = ""
+    sub_questions: List[str] = field(default_factory=list)
+    metadata_filters: Dict[str, Any] = field(default_factory=dict)
+    hypothetical_doc: Optional[str] = None
+    language: Optional[str] = None
     intent: str = "factoid"
     query_routing_intent: str = "retrieval"
     def final_query(self) -> str:
         """Return the best query string to use for retrieval."""
         return self.expanded_query or self.standalone_query or self.original_query
-
-
 
 class QueryUnderstanding:
     """
@@ -47,9 +43,8 @@ class QueryUnderstanding:
     def __init__(self) -> None:
         cfg = get_config()
         sec = get_secrets()
-        self._q_cfg = cfg.query                     
+        self._q_cfg = cfg.query
         self._openai = openai.OpenAI(api_key=sec.openai_api_key)
-
 
         self._nlp: Optional[spacy.Language] = None
         if self._q_cfg["entity_recognition"]["enabled"]:
@@ -61,7 +56,6 @@ class QueryUnderstanding:
                 logger.warning(
                     "spaCy model not found. Run: python -m spacy download en_core_web_trf"
                 )
-
 
     def process(
         self,
@@ -83,18 +77,18 @@ class QueryUnderstanding:
         if not query or not query.strip():
             raise ValueError("query must be a non-empty string")
 
-
         pq = ProcessedQuery(
             original_query=raw_query,
             standalone_query=query,
             )
 
-        working_query = pq.standalone_query        
+        pq.query_routing_intent = self._classify_routing_intent(
+            raw_query, ctx_history=conversation_history or []
+        )
+
+        working_query = pq.standalone_query
 
         pq.intent = self._classify_intent(working_query)
-        pq.query_routing_intent = self._classify_routing_intent(
-            working_query, ctx_history=conversation_history or []
-        )
 
         if self._q_cfg["expansion"]["enabled"]:
             pq.expanded_query, pq.hypothetical_doc = self._expand_query(working_query)
@@ -124,7 +118,6 @@ class QueryUnderstanding:
         )
         return pq
 
-
     def condense_with_history(
         self, query: str, history: List[Dict[str, str]]
     ) -> str:
@@ -132,10 +125,10 @@ class QueryUnderstanding:
         Turns a follow-up question into a standalone query by using chat history.
         """
 
-        window = self._q_cfg["conversation"]["history_window"]   
-        model = self._q_cfg["conversation"]["condense_model"]    
+        window = self._q_cfg["conversation"]["history_window"]
+        model = self._q_cfg["conversation"]["condense_model"]
 
-        trimmed = history[-window:]             
+        trimmed = history[-window:]
 
         history_str = "\n".join(
             f"{turn['role'].capitalize()}: {turn['content']}" for turn in trimmed
@@ -145,10 +138,19 @@ class QueryUnderstanding:
             history_str = "..." + history_str[-MAX_HISTORY_CHARS:]
 
         system_prompt = (
-            "You are a query reformulation assistant. "
-            "Given a conversation history and a follow-up question, "
-            "rewrite the follow-up as a complete, standalone question that "
-            "includes all necessary context. Return ONLY the rewritten question."
+            "You are a query rewriting engine for a RAG system.\n"
+            "Your task is to convert a follow-up question into a standalone question.\n\n"
+
+            "STRICT RULES:\n"
+            "1. Use ONLY information explicitly present in the conversation history.\n"
+            "2. DO NOT guess, infer, or add missing details.\n"
+            "3. If the question is already standalone, return it unchanged but correcting typos if there is any.\n"
+            "4. Preserve technical terms exactly as written.\n"
+            "5. Do NOT answer the question.\n"
+            "6. Output ONLY the rewritten question.\n"
+            "7. If the user message is casual conversation, chit-chat, greeting, acknowledgement, "
+            "reaction, or small talk (examples: 'ok', 'great', 'thanks', 'interesting', "
+            "'hello', 'cool', 'nice'), return the EXACT original user query unchanged.\n"
         )
 
         try:
@@ -161,7 +163,7 @@ class QueryUnderstanding:
                         "content": (
                             f"Conversation history:\n{history_str}\n\n"
                             f"Follow-up question: {query}\n\n"
-                            "Standalone question:"
+                            "Rewritten standalone question:"
                         ),
                     },
                 ],
@@ -172,7 +174,6 @@ class QueryUnderstanding:
         except Exception as exc:
             logger.warning("Condense-with-history failed (%s); using raw query.", exc)
             return query
-
 
     def _expand_query(self, query: str) -> Tuple[str, Optional[str]]:
         """
@@ -210,7 +211,7 @@ class QueryUnderstanding:
                     max_tokens=max_tok,
                 )
                 hypothetical_doc = response.choices[0].message.content.strip()
-        
+
                 return f"{query} {hypothetical_doc}", hypothetical_doc
             except Exception as exc:
                 logger.warning("HyDE expansion failed (%s); using raw query.", exc)
@@ -238,7 +239,6 @@ class QueryUnderstanding:
         else:
             return query, None
 
-
     def _classify_intent(self, query: str) -> str:
         """
         Classify the high-level intent of a query to guide downstream routing.
@@ -255,8 +255,7 @@ class QueryUnderstanding:
         elif any(kw in q_lower for kw in ["why", "explain", "how does", "reason"]):
             return "analytical"
         else:
-            return "factoid"                 
-        
+            return "factoid"
 
     def _classify_routing_intent(
         self,
@@ -350,7 +349,6 @@ class QueryUnderstanding:
 
         return sub_questions[:max_sub]
 
-
     def _extract_filters(self, query: str) -> Dict[str, Any]:
         """
         Run NER on the query to extract named entities and temporal references.
@@ -359,7 +357,7 @@ class QueryUnderstanding:
         filters: Dict[str, Any] = {}
 
         if self._nlp:
-            doc = self._nlp(query)            
+            doc = self._nlp(query)
             for ent in doc.ents:
                 filter_key = f"entity_{ent.label_}"
                 filters.setdefault(filter_key, []).append(ent.text)
@@ -395,4 +393,4 @@ class QueryUnderstanding:
             year = year_match.group(1)
             return {"gte": f"{year}-01-01", "lte": f"{year}-12-31"}
 
-        return None                            
+        return None

@@ -1,35 +1,31 @@
 
 from __future__ import annotations
 
-import json                                         
-import re                                          
-from dataclasses import dataclass, field         
+import json
+import re
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
-import openai                                       
+import openai
 
-from src.config.settings import get_config, get_secrets 
-from src.retrieval.retriever import ContextItem     
-from src.utils.logger import get_logger             
+from src.config.settings import get_config, get_secrets
+from src.retrieval.retriever import ContextItem
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-
 
 @dataclass
 class GenerationResult:
     """The output of the generation stage, including the answer and provenance."""
-    answer: str                                    
-    citations: List[Dict[str, Any]] = field(default_factory=list)  
-    sources: List[str] = field(default_factory=list)  
-    faithfulness_score: Optional[float] = None      
-    has_conflict: bool = False                   
-    conflict_resolution: Optional[str] = None 
-    model_used: str = ""                        
-    prompt_tokens: int = 0                     
-    completion_tokens: int = 0                 
-
-
+    answer: str
+    citations: List[Dict[str, Any]] = field(default_factory=list)
+    sources: List[str] = field(default_factory=list)
+    faithfulness_score: Optional[float] = None
+    has_conflict: bool = False
+    conflict_resolution: Optional[str] = None
+    model_used: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 class Generator:
     """
@@ -39,9 +35,8 @@ class Generator:
     def __init__(self) -> None:
         cfg = get_config()
         sec = get_secrets()
-        self._gen_cfg = cfg.generation              # Generation settings from YAML
+        self._gen_cfg = cfg.generation
         self._openai = openai.OpenAI(api_key=sec.openai_api_key)
-
 
     def generate(
         self,
@@ -67,8 +62,8 @@ class Generator:
             temperature=self._gen_cfg["temperature"],
             max_tokens=self._gen_cfg["max_tokens"],
         )
-        answer_raw = response.choices[0].message.content.strip()
-        usage = response.usage                     
+        answer_raw = (response.choices[0].message.content or "").strip()
+        usage = response.usage
 
         answer_clean, citations = self._extract_citations(answer_raw, context_items)
 
@@ -103,8 +98,6 @@ class Generator:
         )
         return result
 
-
-
     def _build_system_prompt(self) -> str:
         """
         System prompt enforcing grounded, citation-based generation.
@@ -131,7 +124,7 @@ class Generator:
         """
         Build the user prompt with numbered context passages and citation instructions.
         """
-        
+
         context_lines: List[str] = []
         for item in context_items:
             chunk = item.chunk
@@ -142,17 +135,15 @@ class Generator:
             )
             context_lines.append(f"{header}\n{chunk.text}")
 
-        context_str = "\n\n---\n\n".join(context_lines) 
+        context_str = "\n\n---\n\n".join(context_lines)
 
         prompt = f"Context passages:\n\n{context_str}\n\n"
 
         if conflict_note:
-            prompt += f"Note: {conflict_note}\n\n" 
+            prompt += f"Note: {conflict_note}\n\n"
 
         prompt += f"Question: {query}\n\nAnswer (cite every claim with [CITE:chunk_id]):"
         return prompt
-
-
 
     def _detect_conflicts(
         self, context_items: List[ContextItem]
@@ -161,16 +152,15 @@ class Generator:
         Lightweight LLM-based conflict detection across retrieved chunks.
         """
         if not self._gen_cfg["conflict_handling"]["detect_conflicts"]:
-            return False, None                    
+            return False, None
 
         if len(context_items) < 2:
-            return False, None                    
-
+            return False, None
 
         excerpts = [
             f"[{item.chunk.source_name or 'src'} / {item.chunk.ingestion_ts or '?'}]: "
             f"{item.chunk.text[:300]}"
-            for item in context_items          
+            for item in context_items
         ]
         excerpts_str = "\n\n".join(excerpts)
 
@@ -182,22 +172,21 @@ class Generator:
         )
         try:
             response = self._openai.chat.completions.create(
-                model="gpt-3.5-turbo",            
+                model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=100,
             )
             raw = response.choices[0].message.content.strip()
-            parsed = json.loads(raw)          
+            parsed = json.loads(raw)
             if parsed.get("conflict"):
                 desc = parsed.get("description", "Contradictory information found in sources.")
                 logger.warning(f"Conflict detected: {desc}")
                 return True, desc
-        except (json.JSONDecodeError, Exception) as exc:
-            logger.debug(f"Conflict detection failed: {exc}")
+        except Exception as exc:
+            logger.debug("Conflict detection failed: %s", exc)
 
-        return False, None                      
-
+        return False, None
 
     def _extract_citations(
         self,
@@ -206,8 +195,12 @@ class Generator:
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """
         Parse [CITE:chunk_id] markers from the answer and resolve them to source metadata.
+
+        The answer is returned with [CITE:chunk_id] markers replaced by short inline
+        references like [1], [2], … so citations are visible in the rendered text.
+        A deduplicated citations list (one entry per unique chunk_id, in order of first
+        appearance) is returned alongside so callers can render a reference list.
         """
-        
         chunk_map: Dict[str, ContextItem] = {
             item.chunk.chunk_id: item
             for item in context_items
@@ -215,13 +208,27 @@ class Generator:
         }
 
         citation_pattern = re.compile(r"\[CITE:([^\]]+)\]")  # Match [CITE:abc123] markers
-        found_ids = citation_pattern.findall(answer)       
-        cleaned_answer = citation_pattern.sub("", answer).strip()
+        found_ids = citation_pattern.findall(answer)
 
+        # Build ordered deduplication: first appearance order → citation number
+        seen: Dict[str, int] = {}
+        for cid in found_ids:
+            if cid not in seen:
+                seen[cid] = len(seen) + 1  # 1-indexed
+
+        # Replace each [CITE:chunk_id] with its short inline reference [N]
+        def _replace(match: re.Match) -> str:
+            cid = match.group(1)
+            return f"[{seen.get(cid, '?')}]"
+
+        inline_answer = citation_pattern.sub(_replace, answer).strip()
+
+        # Build the citations list in citation-number order
         citations: List[Dict[str, Any]] = []
-        for cid in set(found_ids):            
+        for cid, number in sorted(seen.items(), key=lambda x: x[1]):
             item = chunk_map.get(cid)
             citations.append({
+                "number": number,
                 "chunk_id": cid,
                 "source_file": item.chunk.source_file if item else None,
                 "source_name": item.chunk.source_name if item else None,
@@ -229,8 +236,7 @@ class Generator:
                 "excerpt": item.chunk.text[:200] if item else None,
             })
 
-        return cleaned_answer, citations
-
+        return inline_answer, citations
 
     def _check_faithfulness(
         self,
@@ -258,7 +264,6 @@ class Generator:
 
         context_str = "\n".join(item.chunk.text[:300] for item in context_items)
 
-
         claims_prompt = (
             "Extract all factual claims from the following answer as a JSON array of strings. "
             "Return ONLY valid JSON, no prose.\n\n"
@@ -273,11 +278,10 @@ class Generator:
             )
             claims: List[str] = json.loads(claims_resp.choices[0].message.content.strip())
         except Exception:
-            return 0.5                           
+            return 0.5
 
         if not claims:
-            return 1.0                         
-
+            return 1.0
 
         grounded = 0
         for claim in claims:
@@ -295,11 +299,11 @@ class Generator:
                 )
                 verdict = verify_resp.choices[0].message.content.strip().upper()
                 if verdict.startswith("YES"):
-                    grounded += 1                  
+                    grounded += 1
             except Exception:
-                pass                                
+                pass
 
-        score = grounded / len(claims)            
+        score = grounded / len(claims)
         logger.info(f"RAGAS faithfulness score: {score:.2f} ({grounded}/{len(claims)} claims grounded)")
         return score
 
@@ -313,7 +317,7 @@ class Generator:
         SelfCheckGPT faithfulness via N stochastic samples. High variance → low faithfulness.
         """
 
-        n_samples = self._gen_cfg["faithfulness_check"]["selfcheck_samples"]  
+        n_samples = self._gen_cfg["faithfulness_check"]["selfcheck_samples"]
         context_str = "\n".join(item.chunk.text[:200] for item in context_items)
 
         samples: List[str] = []
@@ -328,12 +332,11 @@ class Generator:
                         ),
                     }
                 ],
-                temperature=1.0,                  
+                temperature=1.0,
                 max_tokens=300,
             )
             samples.append(resp.choices[0].message.content.strip())
 
-        
         consistencies: List[float] = []
         for sample in samples:
             agree_prompt = (
@@ -352,7 +355,7 @@ class Generator:
                 score_str = agree_resp.choices[0].message.content.strip()
                 consistencies.append(float(score_str))
             except ValueError:
-                consistencies.append(0.5)          
+                consistencies.append(0.5)
 
         avg_consistency = sum(consistencies) / len(consistencies) if consistencies else 0.5
         logger.info(f"SelfCheckGPT faithfulness: {avg_consistency:.2f}")

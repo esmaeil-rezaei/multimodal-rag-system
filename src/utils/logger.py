@@ -10,7 +10,6 @@ from contextvars import ContextVar
 from typing import Optional
 from src.config.settings import get_config, get_secrets
 
-
 _LOG_DIR: Path = Path("logs")
 _RUNS_DIR: Path = _LOG_DIR / "runs"
 _DAILY_LOG_FILE: Path = _LOG_DIR / "daily.log"
@@ -22,12 +21,10 @@ _DAILY_LOG_FILE.touch(exist_ok=True)
 _RUN_START_TIME: str = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
 _RUN_LOG_FILE: Path = _RUNS_DIR / f"{_RUN_START_TIME}.log"
 
-
 # Correlation ID for tracing logs across runs
 _correlation_id: ContextVar[str] = ContextVar(
     "_correlation_id", default="no-request-context"
 )
-
 
 def set_correlation_id(cid: Optional[str] = None):
     """
@@ -41,18 +38,29 @@ def get_correlation_id() -> str:
     """Get the current correlation ID."""
     return _correlation_id.get()
 
+def _tty(code: str) -> str:
+    """Return the ANSI code only when stdout is a real terminal."""
+    return code if sys.stdout.isatty() else ""
 
-# ANSI colour codes — used only for terminal output in development
-_RESET  = "\033[0m"
-_BOLD   = "\033[1m"
-_DIM    = "\033[2m"
+RESET  = _tty("\033[0m")
+BOLD   = _tty("\033[1m")
+DIM    = _tty("\033[2m")
+GREEN  = _tty("\033[32m")
+AMBER  = _tty("\033[33m")
+RED    = _tty("\033[31m")
+CYAN   = _tty("\033[36m")
+
+# private aliases used by the formatters below
+_RESET = RESET
+_BOLD  = BOLD
+_DIM   = DIM
 
 _LEVEL_COLOURS = {
-    "DEBUG":    "\033[36m",    # Cyan
-    "INFO":     "\033[32m",    # Green
-    "WARNING":  "\033[33m",    # Yellow
-    "ERROR":    "\033[31m",    # Red
-    "CRITICAL": "\033[35m",    # Magenta
+    "DEBUG":    _tty("\033[36m"),
+    "INFO":     GREEN,
+    "WARNING":  AMBER,
+    "ERROR":    RED,
+    "CRITICAL": _tty("\033[35m"),
 }
 
 class ColouredTerminalFormatter(logging.Formatter):
@@ -60,7 +68,7 @@ class ColouredTerminalFormatter(logging.Formatter):
     Coloured, human-readable output for the terminal.
     Each level gets a distinct colour so WARNING and ERROR stand out
     immediately while scanning a busy log stream.
-    
+
     Example output:
       2026-03-22 14:05:31  INFO      src.ingestion.pipeline  Ingesting: hipaa_summary.md [regulations]
       2026-03-22 14:05:33  WARNING   src.query.pipeline      Auth failed: Not enough segments
@@ -74,12 +82,10 @@ class ColouredTerminalFormatter(logging.Formatter):
         name    = f"{_DIM}{record.name}{_RESET}"                              # Dimmed logger name
         message = record.getMessage()                                         # Log message
 
-
         if record.exc_info:
             message += "\n" + self.formatException(record.exc_info)
 
         return f"{ts}  {level}  {name}  {message}"
-
 
 class PlainFileFormatter(logging.Formatter):
     """
@@ -97,7 +103,7 @@ class PlainFileFormatter(logging.Formatter):
         level   = f"{record.levelname:<8}"                  # Left-padded to 8 chars for alignment
         name    = record.name                               # Logger name e.g. src.ingestion.pipeline
         message = record.getMessage()
-        corr    = get_correlation_id()[:8]                  
+        corr    = get_correlation_id()[:8]
 
         line = f"[{ts}] [{level}] [{name}] {message}  |corr={corr}"
 
@@ -105,7 +111,6 @@ class PlainFileFormatter(logging.Formatter):
             line += "\n" + self.formatException(record.exc_info)
 
         return line
-    
 
 class JsonFormatter(logging.Formatter):
     """
@@ -130,8 +135,6 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info:
             obj["exception"] = self.formatException(record.exc_info)
         return json.dumps(obj, ensure_ascii=False)
-    
-
 
 def get_logger(name: str) -> logging.Logger:
     """
@@ -157,11 +160,9 @@ def get_logger(name: str) -> logging.Logger:
 
     logger = logging.getLogger(name)
     if logger.handlers:
-        return logger                                 
+        return logger
 
     logger.setLevel(log_level)
-
-
 
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(log_level)
@@ -169,9 +170,9 @@ def get_logger(name: str) -> logging.Logger:
     if is_dev:
         stdout_handler.setFormatter(ColouredTerminalFormatter())
     elif structured:
-        stdout_handler.setFormatter(JsonFormatter())              
+        stdout_handler.setFormatter(JsonFormatter())
     else:
-        stdout_handler.setFormatter(PlainFileFormatter())     
+        stdout_handler.setFormatter(PlainFileFormatter())
 
     logger.addHandler(stdout_handler)
 
@@ -184,14 +185,14 @@ def get_logger(name: str) -> logging.Logger:
         utc         = True,                     # UTC-based rotation timing
     )
     daily_handler.setLevel(log_level)
-    daily_handler.setFormatter(PlainFileFormatter())  
-    daily_handler.suffix = "%Y-%m-%d"     
+    daily_handler.setFormatter(PlainFileFormatter())
+    daily_handler.suffix = "%Y-%m-%d"
 
     logger.addHandler(daily_handler)
 
     run_handler = logging.FileHandler(
         filename = str(_RUN_LOG_FILE),          # logs/runs/2026-03-22_14-05-31.log
-        mode     = "a",                        
+        mode     = "a",
         encoding = "utf-8",
     )
     run_handler.setLevel(log_level)
@@ -199,5 +200,5 @@ def get_logger(name: str) -> logging.Logger:
 
     logger.addHandler(run_handler)
 
-    logger.propagate = False                  
+    logger.propagate = False
     return logger
