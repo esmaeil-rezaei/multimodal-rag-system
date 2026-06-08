@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug Ingest (module mode)",
+      "name": "Debug Query (module mode)",
       "type": "python",
       "request": "launch",
       "module": "scripts.query",

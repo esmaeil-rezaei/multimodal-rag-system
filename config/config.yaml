@@ -30,7 +30,6 @@ ingestion:
     pdf_strategy: "hi_res"                      # parsing mode: fast | hi_res | ocr_only
     ocr_languages: ["eng", "fra", "deu"]        # OCR languages
     extract_images: true                        # extract images from PDFs
-    extract_tables: true                        # enable table extraction
     image_output_dir: "artifacts/extracted_images"  # temp image storage
 
   tables:
@@ -64,7 +63,7 @@ ingestion:
 
 # Chunking Strategy
 chunking:
-  strategy: "semantic"                          # chunking mode: fixed | semantic | hierarchical
+  strategy: "hierarchical"                     # chunking mode: fixed | semantic | hierarchical
   chunk_size: 512                              # max tokens per chunk
   min_chunk_size: 50                           # minimum chunk size
   chunk_overlap: 64                            # overlap (fixed mode only)
@@ -74,11 +73,9 @@ chunking:
   window_size: 3                               # context window size
   override_chunk_size: 400                     # hierarchical override size
 
-  embedding_backend: "sentence_transformers"   # embedding backend: # translate_then_retrieve | retrieve_then_translate
-  embedding_model: "BAAI/bge-large-en-v1.5"    # embedding model
-
 # Embedding Models
 embeddings:
+  backend: "sentence_transformers"             # embedding backend: openai | sentence_transformers
   default_model: "BAAI/bge-large-en-v1.5"       # default embedding model
   domain_models:                                # domain-specific overrides
     legal: "BAAI/bge-large-en-v1.5"
@@ -290,6 +287,7 @@ log:
 
 graphrag:
   enabled: true                                # Master switch. Set true to activate
+  run_community_detection: false               # Run CommunityDetector after ingestion (expensive — disable for incremental runs)
 
   extraction_model: "gpt-4o"                   # Model for entity/rel extraction
   extraction_temperature: 0.0                  # Deterministic extraction

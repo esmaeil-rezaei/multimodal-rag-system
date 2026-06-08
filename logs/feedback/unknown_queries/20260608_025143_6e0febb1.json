@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-06-08T02:51:43.090840",
+  "query": "I have a question. what is MDLC?",
+  "reason": "No relevant context found",
+  "conversation_history": [
+    {
+      "role": "user",
+      "content": "Hi"
+    },
+    {
+      "role": "assistant",
+      "content": "Hello! How's your day going?"
+    }
+  ]
+}

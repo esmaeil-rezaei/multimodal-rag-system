@@ -72,9 +72,13 @@ class RAGOrchestrator:
         )
 
         try:
+            # Pass the ORIGINAL raw query so follow-up signals ("it", "this",
+            # "tell me more") are preserved for the OrchestratorAgent's routing
+            # decision.  The condensed standalone query is stored in
+            # ctx.processed_query and used later by prepare_query for retrieval.
             run_result = await Runner.run(
                 self._agent,
-                input=condensed_query,
+                input=raw_query,
                 context=ctx,
                 max_turns=self._max_turns,
             )
@@ -125,13 +129,16 @@ class RAGOrchestrator:
         return result
 
     def _extract_result(self, run_result, ctx: "RAGRunContext") -> GenerationResult:
-        # Prefer result already stored in context by a tool
-        if ctx.generation_result is not None:
-            return ctx.generation_result
-
         last_agent_name = (
             run_result.last_agent.name if run_result.last_agent else "unknown"
         )
+
+        # Prefer result already stored in context by a tool, but stamp the
+        # agent name (not the OpenAI model string) onto model_used.
+        if ctx.generation_result is not None:
+            ctx.generation_result.model_used = last_agent_name
+            return ctx.generation_result
+
         raw_output = getattr(run_result, "final_output", None)
 
         if isinstance(raw_output, GenerationOutput):

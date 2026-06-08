@@ -19,8 +19,8 @@ try:
     from src.graphrag.graph_retriever import GraphRetriever
     _GRAPHRAG_AVAILABLE = True
 except ImportError:
-    Neo4jGraphStore = None  # type: ignore
-    GraphRetriever = None  # type: ignore
+    Neo4jGraphStore = None  
+    GraphRetriever = None  
     _GRAPHRAG_AVAILABLE = False
 
 logger = logging.getLogger(__name__)

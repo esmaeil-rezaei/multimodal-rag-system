@@ -220,4 +220,8 @@ __marimo__/
 #Syetem files
 .DS_Store
 
-knowledge_base/
+knowledge_base/*
+!knowledge_base/.gitkeep
+
+notes/*
+notes/

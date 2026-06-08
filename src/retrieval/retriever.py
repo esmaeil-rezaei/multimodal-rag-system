@@ -269,13 +269,19 @@ class Retriever:
 
     def _expand_to_parents(self, results: List[SearchResult]) -> List[SearchResult]:
         """
-        If we hit a child chunk, replace it with its parent section.
-        This gives the model more context instead of tiny snippets.
+        Replace paragraph-level hits with their parent section for richer context.
+        Section and document nodes are returned as-is — already broad enough.
         """
         expanded: List[SearchResult] = []
         seen_parent_ids = set()
 
         for result in results:
+            level = result.chunk.metadata.get("hierarchy_level", "paragraph")
+
+            if level != "paragraph":
+                expanded.append(result)
+                continue
+
             parent_id = result.chunk.metadata.get("parent_id")
             if parent_id and parent_id not in seen_parent_ids:
                 parent_chunk = self._fetch_chunk_by_id(parent_id)
@@ -289,6 +295,7 @@ class Retriever:
                     expanded.append(parent_result)
                     seen_parent_ids.add(parent_id)
                     continue
+
             expanded.append(result)
         return expanded
 
@@ -339,6 +346,9 @@ class Retriever:
         Reorders retrieved chunks based on relevance.
         Supports different rerankers (Cohere, cross-encoder, or LLM).
         """
+        if not results:
+            return results
+
         model_choice = self._ret_cfg["reranking"]["model"]
         documents = [r.chunk.text for r in results]
 

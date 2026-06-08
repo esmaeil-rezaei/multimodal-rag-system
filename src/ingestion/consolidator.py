@@ -175,6 +175,7 @@ class ChunkConsolidator:
 
         return merged
 
+
     @staticmethod
     def _dominant_language(chunks: List[ParsedChunk]) -> str:
         """

@@ -156,8 +156,17 @@ class DenseVectorStore:
 
         must_conditions = []
 
-        if namespace and namespace != "default":
+        # Restrict ANN search to paragraph-level nodes only.
+        # Section and document nodes live in Qdrant solely as expansion
+        # targets for _fetch_chunk_by_id — they must never appear in search results.
+        must_conditions.append(
+            qdrant_models.FieldCondition(
+                key="hierarchy_level",
+                match=qdrant_models.MatchValue(value="paragraph"),
+            )
+        )
 
+        if namespace and namespace != "default":
             must_conditions.append(
                 qdrant_models.FieldCondition(
                     key="namespace",

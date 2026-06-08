@@ -62,9 +62,9 @@ def main() -> None:
         if not available:
             _abort_no_namespaces()
         logger.info(f"Discovered namespaces: {available}")
+        pipeline = IngestionPipeline()
         for ns in available:
             logger.info(f"=== Ingesting namespace: {ns} ===")
-            pipeline = IngestionPipeline()
             stats = pipeline.run(namespace=ns)
             logger.info(f"Namespace '{ns}' complete: {stats}")
 
@@ -77,11 +77,17 @@ def main() -> None:
         logger.info(f"Ingestion complete: {stats}")
 
     else:
-        # Legacy: ingest entire knowledge_base/ with no namespace scoping
-        logger.info("Starting ingestion (no namespace — using 'default')")
-        pipeline = IngestionPipeline()
-        stats = pipeline.run(namespace=None)
-        logger.info(f"Ingestion complete: {stats}")
+        kb_root = get_config().knowledge_base["root_dir"]
+        avail_str = ", ".join(available) if available else f"(none found — create a subfolder inside {kb_root}/)"
+        print(
+            f"\nNo namespace specified.\n"
+            f"Usage:  python -m scripts.ingest --namespace <name>\n"
+            f"\nThe namespace must match a folder inside your knowledge base root: {kb_root}/\n"
+            f"Available namespaces: {avail_str}\n"
+            f"\nExample: python -m scripts.ingest --namespace {available[0] if available else 'my_project'}\n"
+            f"         python -m scripts.ingest --all   (ingest all namespaces at once)\n"
+        )
+        raise SystemExit(1)
 
 if __name__ == "__main__":
     main()

@@ -68,6 +68,7 @@ class _HeadingTracker:
         """Full ancestor path, e.g. 'Introduction > Background > Methods'."""
         return " > ".join(title for _, title in self._stack)
 
+
 def _infer_depth_from_font_size(
     title_elements: List[Element],
     max_levels: int = 3,
@@ -107,6 +108,7 @@ def _infer_depth_from_font_size(
         bucket = int((unique_sorted[0] - h) / max(bucket_size, 1e-9))
         depth_map[eid] = min(bucket + 1, max_levels)  # 1-indexed depth
     return depth_map
+
 
 class DocumentParser:
     """
@@ -169,8 +171,20 @@ class DocumentParser:
 
         tracker = _HeadingTracker()
         chunks: List[ParsedChunk] = []
+        # Map page_number → tracker snapshot, updated as we walk elements.
+        # Used to assign correct section context to Camelot tables by page.
+        page_context: Dict[int, Dict[str, Any]] = {}
 
         for element in elements:
+            # Record the current tracker state for this element's page.
+            page_num = getattr(getattr(element, "metadata", None), "page_number", None)
+            if page_num is not None:
+                page_context.setdefault(page_num, {
+                    "section": tracker.section,
+                    "section_depth": tracker.section_depth,
+                    "breadcrumb": tracker.breadcrumb,
+                })
+
             if isinstance(element, Title):
                 meta = getattr(element, "metadata", None)
                 depth = (
@@ -178,11 +192,10 @@ class DocumentParser:
                     or fallback_depth_map.get(id(element))
                     or 1
                 )
-                tracker.push(int(depth), element.text or "")
-
                 chunk = self._element_to_chunk(element, file_path, source_name, "text")
                 self._attach_section_context(chunk, tracker)
                 chunks.append(chunk)
+                tracker.push(int(depth), element.text or "")
 
             elif isinstance(element, (Text,)):
                 chunk = self._element_to_chunk(element, file_path, source_name, "text")
@@ -190,9 +203,10 @@ class DocumentParser:
                 chunks.append(chunk)
 
             elif isinstance(element, Table):
-                chunk = self._element_to_chunk(element, file_path, source_name, "table")
-                self._attach_section_context(chunk, tracker)
-                chunks.append(chunk)
+                if not self._ingest_cfg["tables"]["extract_tables"]:
+                    chunk = self._element_to_chunk(element, file_path, source_name, "table")
+                    self._attach_section_context(chunk, tracker)
+                    chunks.append(chunk)
 
             elif isinstance(element, Image):
                 if self._ingest_cfg["image_captioning"]["enabled"]:
@@ -204,12 +218,15 @@ class DocumentParser:
         if self._ingest_cfg["tables"]["extract_tables"]:
             camelot_chunks = self._extract_tables_camelot(file_path, source_name)
             for c in camelot_chunks:
-                c.metadata.setdefault("section", tracker.section)
-                c.metadata.setdefault("section_depth", tracker.section_depth)
-                c.metadata.setdefault("breadcrumb", tracker.breadcrumb)
+                page = c.metadata.get("page_number")
+                ctx = page_context.get(page, {})
+                c.metadata.setdefault("section", ctx.get("section", ""))
+                c.metadata.setdefault("section_depth", ctx.get("section_depth", 0))
+                c.metadata.setdefault("breadcrumb", ctx.get("breadcrumb", ""))
             chunks.extend(camelot_chunks)
 
         return chunks
+
 
     def _parse_md(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
         """
@@ -229,7 +246,13 @@ class DocumentParser:
                 depth = getattr(
                     getattr(element, "metadata", None), "category_depth", 1
                 ) or 1
+                chunk = self._element_to_chunk(element, file_path, source_name, "text")
+                if isinstance(element, Table):
+                    chunk.modality = "table"
+                self._attach_section_context(chunk, tracker)
+                chunks.append(chunk)
                 tracker.push(int(depth), element.text or "")
+                continue
 
             chunk = self._element_to_chunk(element, file_path, source_name, "text")
             if isinstance(element, Table):
@@ -474,7 +497,11 @@ class DocumentParser:
             if isinstance(element, Title):
                 meta = getattr(element, "metadata", None)
                 depth = getattr(meta, "category_depth", 1) or 1
+                chunk = self._element_to_chunk(element, file_path, source_name, "text")
+                self._attach_section_context(chunk, tracker)
+                chunks.append(chunk)
                 tracker.push(int(depth), element.text or "")
+                continue
 
             modality = "table" if isinstance(element, Table) else "text"
             chunk = self._element_to_chunk(element, file_path, source_name, modality)
@@ -546,3 +573,6 @@ def _read_with_encoding_fallback(file_path: Path, preferred: str) -> str:
         except (UnicodeDecodeError, LookupError):
             continue
     return file_path.read_bytes().decode("utf-8", errors="replace")
+
+
+

@@ -326,6 +326,16 @@ class RAGEvaluator:
         if len(self._reference_embeddings) > self._reference_window:
             self._reference_embeddings.pop(0)
 
+        if len(self._reference_embeddings) >= 50 and len(self._reference_embeddings) % 100 == 0:
+            recent = self._reference_embeddings[-20:]
+            drifted, score = self.detect_drift(recent)
+            if drifted:
+                logger.warning(
+                    "Query distribution drift detected (score=%.3f) — "
+                    "knowledge base may need updating.",
+                    score,
+                )
+
     def detect_drift(self, recent_embeddings: List[np.ndarray]) -> Tuple[bool, float]:
         drift_cfg = self._eval_cfg["drift_detection"]
 

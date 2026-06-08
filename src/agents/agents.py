@@ -12,6 +12,7 @@ from src.agents.schemas import DirectResponseOutput, GenerationOutput
 from src.agents.tools import (
     get_conversation_history,
     generate_answer,
+    generate_from_history,
     retrieve_context,
     prepare_query,
 )
@@ -83,104 +84,60 @@ RetrievalAgent: Agent[RAGRunContext] = Agent(
 FollowUpAgent: Agent[RAGRunContext] = Agent(
     name="FollowUpAgent",
     instructions=(
-        "You are a CONTEXT RESOLUTION agent in a RAG system.\n\n"
+        "You are a follow-up resolution agent. Execute these steps in order:\n\n"
 
         "STEP 1: Call get_conversation_history.\n\n"
 
-        "STEP 2: Decide:\n\n"
+        "STEP 2: Call generate_from_history.\n\n"
 
-        "CASE A — CONTEXT ANSWERABLE:\n"
-        "- If the question clearly refers to previous conversation AND you can answer from history\n"
-        "- → call generate_answer\n\n"
+        "STEP 3: Read the tool result:\n"
+        "  - If needs_retrieval is false → you are done. Do NOT output any text.\n"
+        "  - If needs_retrieval is true → hand off to RetrievalAgent.\n\n"
 
-        "CASE B — ASKS FOR NEW KNOWLEDGE:\n"
-        "- If the question requires external information (math, science, facts, definitions, examples)\n"
-        "- → hand off to RetrievalAgent\n\n"
-
-        "CASE C — AMBIGUOUS OR PRONOUN-REFERENCING:\n"
-        "- If question is ambiguous OR refers to prior topic with unclear reference\n"
-        "- → hand off to RetrievalAgent\n\n"
-
-        "CRITICAL RULES:\n"
-        "- NEVER produce explanatory text.\n"
-        "- NEVER say 'I don't know'.\n"
-        "- NEVER narrate reasoning.\n"
-        "- Either generate_answer OR handoff — nothing else.\n"
-        "- Never say I've handed off your question to another agent. Just hand it off silently.\n"
+        "ABSOLUTE RULES:\n"
+        "  - Never produce any text yourself.\n"
+        "  - Never skip steps.\n"
+        "  - Never ask the user for clarification.\n"
+        "  - Hand off silently."
     ),
-    tools=[get_conversation_history, generate_answer],
+    tools=[get_conversation_history, generate_from_history],
     handoffs=[handoff(RetrievalAgent)],
     model=_worker_model,
     model_settings=ModelSettings(temperature=0.0),
-    # NOTE: output_type and output_guardrails are intentionally omitted here.
-    # An agent with handoffs cannot also enforce a structured output_type,
-    # because when it hands off, the framework expects the *receiving* agent
-    # to produce the output. Adding output_type here causes the handoff to
-    # silently fail — the model tries to hand off but the framework blocks it
-    # waiting for a GenerationOutput that never comes.
+    # NOTE: output_type intentionally omitted — an agent with handoffs cannot
+    # also enforce a structured output_type (the framework would block handoffs
+    # waiting for a typed output that never arrives from the receiving agent).
+    # generate_from_history stores its result on ctx.generation_result directly.
 )
 
 OrchestratorAgent: Agent[RAGRunContext] = Agent(
     name="OrchestratorAgent",
     instructions=(
         "You are the routing controller for a multi-agent RAG system.\n\n"
-        "Your ONLY responsibility is to select the correct agent.\n"
-        "You must NEVER answer the user's question directly.\n\n"
+        "Your ONLY job is to hand off to the correct agent. Never answer directly.\n\n"
 
-        "STEP 1 — Always call get_conversation_history first.\n"
-        "You need the history to make a correct routing decision.\n\n"
+        "STEP 1 — Call get_conversation_history.\n\n"
 
-        "STEP 2 — Apply routing rules in this exact order:\n\n"
+        "STEP 2 — Hand off using these rules (evaluate in this order):\n\n"
 
-        "3. FollowUpAgent — CHECK THIS FIRST before Retrieval\n"
-        "Route here if ANY of the following are true:\n"
-        "  a) Explicit callbacks:\n"
-        "     - Contains: 'you just', 'you said', 'you mentioned', 'as you said',\n"
-        "       'but you', 'above', 'earlier', 'previous', 'last time'\n"
-        "  b) Referential pronouns (when history exists):\n"
-        "     - Starts with or contains: 'it', 'its', 'they', 'their', 'this', 'that',\n"
-        "       'these', 'those', 'the same', 'the method', 'the approach',\n"
-        "       'the algorithm', 'the model', 'the result', 'the comparison'\n"
-        "  c) Expansion requests on a prior topic:\n"
-        "     - 'tell me more', 'elaborate', 'expand', 'clarify', 'explain more',\n"
-        "       'more detail', 'give an example', 'can you summarize', 'summarize this',\n"
-        "       'summarize the chat', 'list the takeaways', 'itemize'\n"
-        "  d) Implicit topic continuations (NO retrieval keywords, history exists):\n"
-        "     - Short query (under 6 words) with no named entity AND history exists\n"
-        "     - Vague nouns that only make sense given prior context:\n"
-        "       'superiority', 'the difference', 'the advantage', 'the features',\n"
-        "       'the findings', 'the comparison', 'the results', 'why?', 'how so?',\n"
-        "       'really?', 'are you sure?', 'prove it'\n"
-        "  e) Correction or disagreement with the previous answer:\n"
-        "     - 'that is wrong', 'not quite', 'i disagree', 'actually', 'but wait',\n"
-        "       'that's not what i asked'\n\n"
+        "FollowUpAgent — EVALUATE FIRST\n"
+        "Route here when conversation history exists AND the message is connected "
+        "to a prior turn: it references something already discussed, asks for "
+        "elaboration or clarification on a previous answer, uses pronouns or "
+        "shorthand that only make sense given prior context, requests a summary "
+        "of the conversation, or expresses disagreement with a prior answer.\n"
+        "When history exists and the intent is ambiguous, prefer FollowUpAgent "
+        "over RetrievalAgent.\n\n"
 
-        "1. ConversationalAgent\n"
-        "Route here ONLY if ALL of the following are true:\n"
-        "  - No information need whatsoever\n"
-        "  - No named entity present\n"
-        "  - History is empty OR message is clearly a greeting/reaction\n"
-        "  - Examples: 'hi', 'hello', 'thanks', 'ok', 'cool', 'got it',\n"
-        "    'how are you', 'what is your name'\n\n"
+        "ConversationalAgent\n"
+        "Route here only for pure small talk or social pleasantries with no "
+        "information need and no connection to prior content.\n\n"
 
-        "2. RetrievalAgent\n"
-        "Route here if:\n"
-        "  - Query is a direct knowledge question with no reference to prior turns\n"
-        "  - No follow-up signals from section 3 are present\n"
-        "  - Examples: 'what is HYBRID algorithm?', 'who is Alan Turing?',\n"
-        "    'explain transformer architecture'\n\n"
+        "RetrievalAgent\n"
+        "Route here for direct knowledge questions that stand alone, with no "
+        "reference to prior turns and no ambiguity.\n\n"
 
-        "CRITICAL RULES:\n"
-        "- Evaluate FollowUpAgent BEFORE RetrievalAgent. Most ambiguous cases\n"
-        "  belong to FollowUp, not Retrieval.\n"
-        "- 'Do you know [name]?' → RetrievalAgent (knowledge query, not small talk).\n"
-        "- Any request to summarize, recap, or list takeaways from THIS conversation\n"
-        "  → FollowUpAgent (it has get_conversation_history).\n"
-        "- A vague noun or short phrase that only makes sense given prior context\n"
-        "  → FollowUpAgent, even if it looks like a retrieval query.\n"
-        "- When in doubt between Retrieval and FollowUp and history exists → FollowUp.\n"
-        "- When in doubt between Conversational and Retrieval → Retrieval.\n"
-        "- Always hand off immediately. Never answer directly."
+        "Always hand off immediately. Never answer directly."
     ),
     tools=[get_conversation_history],
     handoffs=[

@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-06-08T03:23:12.059531",
+  "query": "I  have a question. what is mcdl?",
+  "reason": "No relevant context found",
+  "conversation_history": [
+    {
+      "role": "user",
+      "content": "Hi"
+    },
+    {
+      "role": "assistant",
+      "content": "Hello! How's your day going?"
+    }
+  ]
+}

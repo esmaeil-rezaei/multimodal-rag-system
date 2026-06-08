@@ -75,31 +75,29 @@ class TextChunker:
     def __init__(self) -> None:
         cfg = get_config()
         self._chunk_cfg = cfg.chunking
+        self._emb_cfg   = cfg.embeddings
         self._tokeniser = tiktoken.get_encoding("cl100k_base")
         self._embedder = None
 
     def _get_embedder(self):
-        """
-        Initialize the configured embedding backend.
-        """
+        """Initialize the embedding backend using the shared embeddings config."""
         if self._embedder is not None:
             return self._embedder
 
-        backend = self._chunk_cfg.get("embedding_backend", "openai")
+        backend    = self._emb_cfg.get("backend", "sentence_transformers")
+        model_name = self._emb_cfg.get("default_model", "BAAI/bge-large-en-v1.5")
 
         if backend == "openai":
             client = OpenAI(api_key=get_secrets().openai_api_key)
-            model  = self._chunk_cfg.get("embedding_model", "text-embedding-3-small")
 
             def embed(texts: List[str]) -> np.ndarray:
-                response = client.embeddings.create(input=texts, model=model)
+                response = client.embeddings.create(input=texts, model=model_name)
                 return np.array([item.embedding for item in response.data], dtype=np.float32)
 
             self._embedder = embed
 
         elif backend == "sentence_transformers":
-            model_name = self._chunk_cfg.get("embedding_model", "all-MiniLM-L6-v2")
-            st_model   = SentenceTransformer(model_name)
+            st_model = SentenceTransformer(model_name)
 
             def embed(texts: List[str]) -> np.ndarray:
                 return st_model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
@@ -171,7 +169,6 @@ class TextChunker:
     def _semantic_chunking(
         self,
         source: ParsedChunk,
-        override_chunk_size: Optional[int] = None,
     ) -> List[ChunkNode]:
         """
         Split text into semantic chunks using embedding similarity.
@@ -265,7 +262,7 @@ class TextChunker:
 
             para_source = self._clone_chunk(source, section_text)
             para_source.metadata["section"] = heading
-            para_nodes = self._semantic_chunking(para_source, self._chunk_cfg["override_chunk_size"])
+            para_nodes = self._semantic_chunking(para_source)
 
             for para_node in para_nodes:
                 para_node.parent_id = section_id

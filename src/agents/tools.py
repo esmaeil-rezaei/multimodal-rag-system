@@ -52,7 +52,16 @@ async def prepare_query(
                 extra={"query": query, "correlation_id": ctx.context.correlation_id})
 
     qu = _container(ctx).query_understanding
-    effective_query = query or ctx.context.raw_query
+
+    # If the orchestrator already condensed a follow-up into a standalone
+    # query (stored as a string in processed_query before this tool runs),
+    # prefer that over whatever the agent forwarded.  This ensures retrieval
+    # uses a well-formed question even when the raw input is vague ("what
+    # about it?", "tell me more", etc.).
+    if isinstance(ctx.context.processed_query, str) and ctx.context.processed_query:
+        effective_query = ctx.context.processed_query
+    else:
+        effective_query = query or ctx.context.raw_query
 
     with TraceSpan("understand_query"):
         try:
@@ -207,6 +216,78 @@ async def retrieve_context(
         except Exception as exc:
             logger.error("retrieve_context tool failed: %s", exc, exc_info=True)
             return json.dumps({"error": str(exc), "chunks_retrieved": 0})
+
+@function_tool
+async def generate_from_history(
+    ctx: RunContextWrapper[RAGRunContext],
+) -> str:
+    """
+    Answer a follow-up question using conversation history only.
+    Returns needs_retrieval=true when history is absent or clearly insufficient,
+    so the caller can hand off to RetrievalAgent instead.
+    """
+    history = ctx.context.conversation_history
+
+    if not history:
+        return json.dumps({"answer": "", "needs_retrieval": True})
+
+    # Prefer the condensed standalone query (has full context baked in);
+    # fall back to the raw original question.
+    condensed = ctx.context.processed_query
+    question = (
+        condensed
+        if isinstance(condensed, str) and condensed
+        else ctx.context.raw_query
+    )
+
+    container = _container(ctx)
+    openai_client = container.generator._openai
+    gen_cfg = get_config().generation
+
+    history_text = "\n".join(
+        f"{msg['role'].upper()}: {msg['content']}"
+        for msg in history[-10:]
+    )
+
+    system_prompt = (
+        "You are a precise question-answering assistant.\n"
+        "The conversation history below is your ONLY knowledge source.\n"
+        "Your job:\n"
+        "1. Find the answer to the user's question inside the history.\n"
+        "2. Return that answer directly and concisely — no preamble, "
+        "no 'based on the conversation', no hedging.\n"
+        "3. If the answer is genuinely not present in the history, "
+        "respond with exactly the token: NEEDS_RETRIEVAL"
+    )
+    user_prompt = (
+        f"CONVERSATION HISTORY:\n{history_text}\n\n"
+        f"QUESTION: {question}"
+    )
+
+    try:
+        response = openai_client.chat.completions.create(
+            model=gen_cfg["model"],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_tokens=gen_cfg.get("max_tokens", 1024),
+        )
+        answer = (response.choices[0].message.content or "").strip()
+    except Exception as exc:
+        logger.error("generate_from_history failed: %s", exc, exc_info=True)
+        return json.dumps({"answer": "", "needs_retrieval": True})
+
+    if answer == "NEEDS_RETRIEVAL" or not answer:
+        return json.dumps({"answer": "", "needs_retrieval": True})
+
+    from src.generation.generator import GenerationResult
+    ctx.context.generation_result = GenerationResult(
+        answer=answer, model_used="FollowUpAgent"
+    )
+    return json.dumps({"answer": answer, "needs_retrieval": False})
+
 
 @function_tool
 async def generate_answer(

@@ -28,7 +28,6 @@ class ProcessedQuery:
     metadata_filters: Dict[str, Any] = field(default_factory=dict)
     hypothetical_doc: Optional[str] = None
     language: Optional[str] = None
-    intent: str = "factoid"
     query_routing_intent: str = "retrieval"
     def final_query(self) -> str:
         """Return the best query string to use for retrieval."""
@@ -88,8 +87,6 @@ class QueryUnderstanding:
 
         working_query = pq.standalone_query
 
-        pq.intent = self._classify_intent(working_query)
-
         if self._q_cfg["expansion"]["enabled"]:
             pq.expanded_query, pq.hypothetical_doc = self._expand_query(working_query)
         else:
@@ -111,7 +108,6 @@ class QueryUnderstanding:
             extra={
                 "original": query,
                 "standalone": pq.standalone_query,
-                "intent": pq.intent,
                 "sub_questions": len(pq.sub_questions),
                 "filters": pq.metadata_filters,
             },
@@ -239,24 +235,6 @@ class QueryUnderstanding:
         else:
             return query, None
 
-    def _classify_intent(self, query: str) -> str:
-        """
-        Classify the high-level intent of a query to guide downstream routing.
-        """
-        q_lower = query.lower()
-        if any(kw in q_lower for kw in ["compare", "difference", "vs", "versus", "contrast"]):
-            return "comparative"
-        elif any(kw in q_lower for kw in ["list", "enumerate", "what are all", "give me"]):
-            return "enumerative"
-        elif any(kw in q_lower for kw in ["when", "date", "year", "time"]):
-            return "temporal"
-        elif any(kw in q_lower for kw in ["who", "person", "author", "ceo", "founder"]):
-            return "entity"
-        elif any(kw in q_lower for kw in ["why", "explain", "how does", "reason"]):
-            return "analytical"
-        else:
-            return "factoid"
-
     def _classify_routing_intent(
         self,
         query: str,
@@ -322,7 +300,8 @@ class QueryUnderstanding:
 
         system_prompt = (
             f"You are a question decomposition assistant. "
-            f"Break the following complex question into at most {max_sub} simpler, "
+            f"If the question is already simple and self-contained, return it as a single sub-question. "
+            f"If it is complex or multi-hop, break it into at most {max_sub} simpler, "
             f"self-contained sub-questions. Return ONLY a numbered list, one per line."
         )
 

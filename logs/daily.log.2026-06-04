@@ -1,0 +1,27 @@
+[2026-06-02 01:48:47 UTC] [INFO    ] [src.ingestion.chunker] Chunking produced 9 nodes from 6 consolidated sections [strategy=semantic]  |corr=4d1a2e39
+[2026-06-04 00:31:40 UTC] [INFO    ] [scripts.ingest] Starting ingestion (no namespace — using 'default')  |corr=253d08b2
+[2026-06-04 00:31:42 UTC] [INFO    ] [src.operations.ops_middleware] Presidio PII guard initialised  |corr=253d08b2
+[2026-06-04 00:31:43 UTC] [INFO    ] [src.indexing.embedder] Loading embedding model: BAAI/bge-large-en-v1.5  |corr=253d08b2
+[2026-06-04 00:31:47 UTC] [INFO    ] [src.indexing.vector_store] Qdrant running in local embedded mode → qdrant_storage  |corr=253d08b2
+[2026-06-04 00:31:47 UTC] [WARNING ] [src.indexing.vector_store] Elasticsearch unavailable (Connection error caused by: ConnectionError(Connection error caused by: NewConnectionError(HTTPConnection(host='localhost', port=9200): Failed to establish a new connection: [Errno 61] Connection refused))). Sparse BM25 index disabled — hybrid search will use dense-only retrieval.  |corr=253d08b2
+[2026-06-04 00:31:47 UTC] [INFO    ] [src.graphrag.neo4j_store] Neo4j driver initialised: neo4j+s://a74e7607.databases.neo4j.io (db=a74e7607)  |corr=253d08b2
+[2026-06-04 00:31:47 UTC] [ERROR   ] [src.ingestion.pipeline] GraphRAG initialisation failed — continuing without graph layer: Failed to DNS resolve address a74e7607.databases.neo4j.io:7687: [Errno 8] nodename nor servname provided, or not known  |corr=253d08b2
+[2026-06-04 00:31:47 UTC] [INFO    ] [src.ingestion.pipeline] Ingestion started: 2 files discovered in knowledge_base  |corr=93105bbd
+[2026-06-04 00:31:47 UTC] [INFO    ] [src.ingestion.pipeline] Ingesting: DigitalCognitiveScreening_vs_MoCA_CerebralAmyloid.pdf [Project_Radiology]  |corr=93105bbd
+[2026-06-04 00:31:47 UTC] [INFO    ] [src.ingestion.parser] Parsing file  |corr=93105bbd
+[2026-06-04 00:32:05 UTC] [WARNING ] [src.ingestion.parser] Camelot failed for knowledge_base/Project_Radiology/DigitalCognitiveScreening_vs_MoCA_CerebralAmyloid.pdf: Ghostscript is not installed. You can install it using the instructions here: https://camelot-py.readthedocs.io/en/master/user/install-deps.html  |corr=93105bbd
+[2026-06-04 00:32:05 UTC] [INFO    ] [src.ingestion.consolidator] Consolidation: 34 elements → 6 sections  |corr=93105bbd
+[2026-06-04 00:32:05 UTC] [INFO    ] [src.ingestion.deduplicator] Deduplication complete: 6 unique, 0 exact dups, 0 fuzzy dups removed  |corr=93105bbd
+[2026-06-04 00:48:55 UTC] [INFO    ] [scripts.ingest] Starting ingestion (no namespace — using 'default')  |corr=c217a3b1
+[2026-06-04 00:48:57 UTC] [INFO    ] [src.operations.ops_middleware] Presidio PII guard initialised  |corr=c217a3b1
+[2026-06-04 00:48:57 UTC] [INFO    ] [src.indexing.embedder] Loading embedding model: BAAI/bge-large-en-v1.5  |corr=c217a3b1
+[2026-06-04 00:49:01 UTC] [INFO    ] [src.indexing.vector_store] Qdrant running in local embedded mode → qdrant_storage  |corr=c217a3b1
+[2026-06-04 00:49:01 UTC] [WARNING ] [src.indexing.vector_store] Elasticsearch unavailable (Connection error caused by: ConnectionError(Connection error caused by: NewConnectionError(HTTPConnection(host='localhost', port=9200): Failed to establish a new connection: [Errno 61] Connection refused))). Sparse BM25 index disabled — hybrid search will use dense-only retrieval.  |corr=c217a3b1
+[2026-06-04 00:49:01 UTC] [INFO    ] [src.graphrag.neo4j_store] Neo4j driver initialised: neo4j+s://a74e7607.databases.neo4j.io (db=a74e7607)  |corr=c217a3b1
+[2026-06-04 00:49:01 UTC] [ERROR   ] [src.ingestion.pipeline] GraphRAG initialisation failed — continuing without graph layer: Failed to DNS resolve address a74e7607.databases.neo4j.io:7687: [Errno 8] nodename nor servname provided, or not known  |corr=c217a3b1
+[2026-06-04 00:49:01 UTC] [INFO    ] [src.ingestion.pipeline] Ingestion started: 2 files discovered in knowledge_base  |corr=6f756ed2
+[2026-06-04 00:49:01 UTC] [INFO    ] [src.ingestion.pipeline] Ingesting: DigitalCognitiveScreening_vs_MoCA_CerebralAmyloid.pdf [Project_Radiology]  |corr=6f756ed2
+[2026-06-04 00:49:01 UTC] [INFO    ] [src.ingestion.parser] Parsing file  |corr=6f756ed2
+[2026-06-04 00:49:14 UTC] [WARNING ] [src.ingestion.parser] Camelot failed for knowledge_base/Project_Radiology/DigitalCognitiveScreening_vs_MoCA_CerebralAmyloid.pdf: Ghostscript is not installed. You can install it using the instructions here: https://camelot-py.readthedocs.io/en/master/user/install-deps.html  |corr=6f756ed2
+[2026-06-04 00:49:14 UTC] [INFO    ] [src.ingestion.consolidator] Consolidation: 34 elements → 6 sections  |corr=6f756ed2
+[2026-06-04 00:49:14 UTC] [INFO    ] [src.ingestion.deduplicator] Deduplication complete: 6 unique, 0 exact dups, 0 fuzzy dups removed  |corr=6f756ed2
