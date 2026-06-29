@@ -2,28 +2,30 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
-from src.config.settings import get_config, get_secrets
-from src.operations.ops_middleware import AccessControlMiddleware, PIIGuard
+from src.agents.orchestrator import RAGOrchestrator
+from src.config.settings import get_config
+from src.evaluation.evaluator import RAGEvaluator
+from src.evaluation.retrieval_eval import RetrievalEvaluator
+from src.generation.generator import Generator
 from src.indexing.embedder import EmbeddingRouter, QueryEmbedder
 from src.indexing.vector_store import DenseVectorStore, HybridSearchEngine, SparseIndex
-from src.retrieval.retriever import Retriever
-from src.generation.generator import Generator
-from src.evaluation.evaluator import RAGEvaluator
+from src.operations.ops_middleware import AccessControlMiddleware, PIIGuard
 from src.query.understanding import QueryUnderstanding
-from src.agents.orchestrator import RAGOrchestrator
+from src.retrieval.retriever import Retriever
 
 try:
-    from src.graphrag.neo4j_store import Neo4jGraphStore
     from src.graphrag.graph_retriever import GraphRetriever
+    from src.graphrag.neo4j_store import Neo4jGraphStore
+
     _GRAPHRAG_AVAILABLE = True
 except ImportError:
-    Neo4jGraphStore = None  
-    GraphRetriever = None  
+    Neo4jGraphStore = None
+    GraphRetriever = None
     _GRAPHRAG_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class AppContainer:
@@ -39,7 +41,8 @@ class AppContainer:
     pii_guard: object = field(default=None, repr=False)
     acl: object = field(default=None, repr=False)
     query_understanding: object = field(default=None, repr=False)
-    graph_retriever: Optional[object] = field(default=None, repr=False)
+    retrieval_evaluator: object = field(default=None, repr=False)
+    graph_retriever: object | None = field(default=None, repr=False)
     orchestrator: object = field(default=None, repr=False)
 
     _started: bool = False
@@ -54,9 +57,6 @@ class AppContainer:
 
         logger.info("AppContainer.startup — initialising retrieval stack")
 
-        cfg = get_config()
-        sec = get_secrets()
-
         self.acl = AccessControlMiddleware()
         self.pii_guard = PIIGuard()
 
@@ -67,15 +67,20 @@ class AppContainer:
         self.dense_store = DenseVectorStore()
         self.sparse_index = SparseIndex()
         self.search_engine = HybridSearchEngine(self.dense_store, self.sparse_index)
-        logger.info("Vector stores ready (dense=%s, sparse_available=%s)",
-                    type(self.dense_store).__name__,
-                    getattr(self.sparse_index, "_available", False))
+        logger.info(
+            "Vector stores ready (dense=%s, sparse_available=%s)",
+            type(self.dense_store).__name__,
+            getattr(self.sparse_index, "_available", False),
+        )
 
         self.retriever = Retriever(self.search_engine, self.dense_store)
         logger.info("Retriever ready")
 
         self.generator = Generator()
         self.evaluator = RAGEvaluator()
+        self.retrieval_evaluator = RetrievalEvaluator(
+            embedder=self.embedder, retriever=self.retriever
+        )
         logger.info("Generator and evaluator ready")
 
         self.query_understanding = QueryUnderstanding()
@@ -101,7 +106,7 @@ class AppContainer:
             logger.warning("DenseVectorStore close error (non-fatal): %s", exc)
         self._started = False
 
-    def _try_init_graph_retriever(self) -> Optional[object]:
+    def _try_init_graph_retriever(self) -> object | None:
         cfg = get_config()
         gr_cfg = cfg.graphrag
         if not gr_cfg.get("enabled", False):
@@ -125,7 +130,8 @@ class AppContainer:
             return None
 
 
-_container: Optional[AppContainer] = None
+_container: AppContainer | None = None
+
 
 def get_container() -> AppContainer:
     """Return the application container. Raises if startup() was not called."""
@@ -135,6 +141,7 @@ def get_container() -> AppContainer:
             "Call src.core.container.init_container() inside the FastAPI lifespan."
         )
     return _container
+
 
 def init_container() -> AppContainer:
     """Create and start the container. Called once from app lifespan."""

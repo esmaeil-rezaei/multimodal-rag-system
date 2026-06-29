@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  # Dummy values so Secrets() can be instantiated during tests/import.
+  # tests/conftest.py also sets these via monkeypatch for the test session,
+  # but lint/type-check steps that import the package need them too.
+  OPENAI_API_KEY: "ci-dummy-openai-key"
+  COHERE_API_KEY: "ci-dummy-cohere-key"
+  JWT_SECRET_KEY: "ci-dummy-jwt-secret-key-for-ci-only"
+  APP_ENV: "test"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install lint tooling
+        run: pip install ruff==0.9.6
+      - name: Run ruff
+        run: ruff check .
+
+  format:
+    name: Format check (black)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install format tooling
+        run: pip install black==25.1.0
+      - name: Run black --check
+        run: black --check .
+
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run mypy
+        run: mypy src app
+
+  test:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run pytest
+        run: pytest -q

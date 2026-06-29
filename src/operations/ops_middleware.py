@@ -1,32 +1,29 @@
-
 from __future__ import annotations
 
 import hashlib
 import json
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import jwt
-import redis
 import numpy as np
+import redis
 from presidio_analyzer import AnalyzerEngine
 from presidio_anonymizer import AnonymizerEngine
 
-from src.generation.generator import GenerationResult
 from src.config.settings import get_config, get_secrets
+from src.generation.generator import GenerationResult
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
+
 class SemanticCache:
-    """
-    Cache layer that stores (query_vector → GenerationResult) pairs in Redis.
-    On a query, we compare the incoming embedding to cached embeddings and
-    return the cached answer if the cosine similarity exceeds the threshold.
-    """
+    """Redis cache for (query_vector → GenerationResult) pairs, using cosine similarity for lookups."""
 
     def __init__(self) -> None:
         cfg = get_config()
@@ -42,7 +39,7 @@ class SemanticCache:
             logger.info("Semantic cache initialised (Redis)")
 
     @staticmethod
-    def _namespace_slug(namespace: Optional[str]) -> str:
+    def _namespace_slug(namespace: str | None) -> str:
         """Stable 8-char hex slug for a namespace string (used in cache keys)."""
         return hashlib.sha256((namespace or "default").encode()).hexdigest()[:8]
 
@@ -50,13 +47,9 @@ class SemanticCache:
         self,
         query_vector: np.ndarray,
         query_routing_intent: str = "retrieval",
-        namespace: Optional[str] = None,
-    ) -> Optional[GenerationResult]:
-        """
-        Attempt to retrieve a cached GenerationResult for a query vector.
-        Results are scoped by namespace so that a hit in one tenant never
-        bleeds into another.  Returns None on cache miss.
-        """
+        namespace: str | None = None,
+    ) -> GenerationResult | None:
+        """Return a cached GenerationResult for the query vector, scoped by namespace; None on miss."""
         if not self._enabled:
             return None
 
@@ -78,8 +71,11 @@ class SemanticCache:
                 similarity = self._cosine_similarity(query_vector, cached_vec)
 
                 if similarity >= self._threshold:
-                    logger.info("Semantic cache HIT (similarity=%.3f, namespace=%s)",
-                                similarity, namespace or "default")
+                    logger.info(
+                        "Semantic cache HIT (similarity=%.3f, namespace=%s)",
+                        similarity,
+                        namespace or "default",
+                    )
                     return self._deserialise_result(entry["result"])
         except Exception as exc:
             logger.warning("Semantic cache lookup failed: %s", exc)
@@ -90,7 +86,7 @@ class SemanticCache:
         self,
         query_vector: np.ndarray,
         result: GenerationResult,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
     ) -> None:
         """Store a GenerationResult scoped to a namespace."""
         if not self._enabled:
@@ -119,7 +115,7 @@ class SemanticCache:
         return float(np.dot(a, b) / (a_norm * b_norm))
 
     @staticmethod
-    def _serialise_result(result: GenerationResult) -> Dict[str, Any]:
+    def _serialise_result(result: GenerationResult) -> dict[str, Any]:
         """Convert a GenerationResult to a JSON-serialisable dict."""
         return {
             "answer": result.answer,
@@ -131,7 +127,7 @@ class SemanticCache:
         }
 
     @staticmethod
-    def _deserialise_result(data: Dict[str, Any]) -> GenerationResult:
+    def _deserialise_result(data: dict[str, Any]) -> GenerationResult:
         """Reconstruct a GenerationResult from a cached dict."""
         result = GenerationResult(answer=data["answer"])
         result.citations = data.get("citations", [])
@@ -140,6 +136,7 @@ class SemanticCache:
         result.has_conflict = data.get("has_conflict", False)
         result.model_used = data.get("model_used", "cached")
         return result
+
 
 class AccessControlMiddleware:
     """
@@ -153,7 +150,7 @@ class AccessControlMiddleware:
         self._enabled = self._acl_cfg["enabled"]
         self._jwt_secret = sec.jwt_secret_key or ""
 
-    def authenticate(self, token: str) -> Dict[str, Any]:
+    def authenticate(self, token: str) -> dict[str, Any]:
         if not self._enabled:
             return {"namespace": "default", "roles": ["public"]}
 
@@ -170,11 +167,12 @@ class AccessControlMiddleware:
         claims.setdefault("roles", ["public"])
         return claims
 
-    def get_namespace(self, claims: Dict[str, Any]) -> str:
+    def get_namespace(self, claims: dict[str, Any]) -> str:
         return claims.get("namespace", "default")
 
-    def get_roles(self, claims: Dict[str, Any]) -> List[str]:
+    def get_roles(self, claims: dict[str, Any]) -> list[str]:
         return claims.get("roles", ["public"])
+
 
 class PIIGuard:
     """
@@ -231,18 +229,19 @@ class PIIGuard:
             logger.error(f"PII redaction failed: {exc}")
             return text
 
+
 class TraceSpan:
     """
     Context manager for request tracing spans.
     """
 
-    def __init__(self, name: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, name: str, metadata: dict[str, Any] | None = None) -> None:
         self._name = name
         self._metadata = metadata or {}
         self._span_id = str(uuid.uuid4())[:8]
         self._start_time: float = 0.0
 
-    def __enter__(self) -> "TraceSpan":
+    def __enter__(self) -> TraceSpan:
         self._start_time = time.perf_counter()
         logger.debug(
             f"Span START: {self._name}",
@@ -265,13 +264,15 @@ class TraceSpan:
             },
         )
 
+
 def with_tracing(span_name: str) -> Callable:
-    """
-    Wrap a function in a TraceSpan for tracing.
-    """
+    """Wrap a function in a TraceSpan for tracing."""
+
     def decorator(func: F) -> F:
         def wrapper(*args, **kwargs):
             with TraceSpan(span_name):
                 return func(*args, **kwargs)
+
         return wrapper
+
     return decorator

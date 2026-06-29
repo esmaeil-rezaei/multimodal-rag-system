@@ -1,0 +1,149 @@
+[
+  {
+    "query": "What are the three internationally validated CSF biomarkers used to diagnose Alzheimer's disease?",
+    "relevant_chunk_ids": [
+      "60ec847cedb185130320583eba0954afcb07028f4aa561793f83c619a11ecaf7",
+      "16a5ff803b4e619355c7d22e4b9d4fc7ef41f5b6da5309f397d8e81939fea601"
+    ],
+    "expected_answer_keywords": ["Ab(1-42)", "total tau", "phospho-tau-181", "CSF", "ELISA", "combination"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "methodology", "topic": "CSF biomarkers", "difficulty": "easy"}
+  },
+  {
+    "query": "What criteria must a biomarker satisfy to be considered useful for diagnosing Alzheimer's disease?",
+    "relevant_chunk_ids": [
+      "9079b3b60aedc4099efef8bffd87b9a64e542d06631d31ab348f2bae6feab145",
+      "1bb5cf8bf9e5579de10944db2367135c98bf64310a5f589f10fdd19c733be69e",
+      "60c5c57459e118b87d7b5002cfcc929ff8e6cc60a8688a85d88a36d59b56957c"
+    ],
+    "expected_answer_keywords": ["sensitivity", "specificity", "pathological processes", "pharmacological", "repeated", "biological marker"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "definition", "topic": "biomarker criteria", "difficulty": "medium"}
+  },
+  {
+    "query": "Why are CSF Ab(1-42) levels reduced in Alzheimer's disease patients?",
+    "relevant_chunk_ids": [
+      "24d6f08941737177a3e040d828c31beee67b306e23c13c5dd73ec318a2bb0140",
+      "1e9c7758055a32cd860da8eb34097daa01ebd93794cda5400f04161ce84cd1a2"
+    ],
+    "expected_answer_keywords": ["reduced clearance", "plaque deposition", "aggregation", "brain", "Ab(1-42)", "APP"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "pathology", "topic": "Ab(1-42) mechanism", "difficulty": "medium"}
+  },
+  {
+    "query": "What are the age-stratified reference ranges for total tau in cerebrospinal fluid?",
+    "relevant_chunk_ids": [
+      "c2f807e38c027a17f78d91426d8d53d8fa99a377622982360c45168c55992f89"
+    ],
+    "expected_answer_keywords": ["300", "450", "500", "pg/ml", "age", "total tau", "CSF"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "results", "topic": "total tau reference ranges", "difficulty": "easy"}
+  },
+  {
+    "query": "What is the diagnostic cut-off for phospho-tau-181 in CSF and what pathological process does it reflect?",
+    "relevant_chunk_ids": [
+      "4f9df82b77e144d6196a2bbe870b6ef01c076b088c43bcebf81977dc403aff92"
+    ],
+    "expected_answer_keywords": ["60 pg/ml", "phospho-tau-181", "hyperphosphorylated", "axonal transport", "cut-off"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "results", "topic": "phospho-tau-181", "difficulty": "medium"}
+  },
+  {
+    "query": "What are the limitations of CSF biomarker collection that motivate the search for blood-based AD biomarkers?",
+    "relevant_chunk_ids": [
+      "78949506a52a843b6a37860d3ef384b5a45b4e2623106e26ca73eeb688b1ce29",
+      "df2ace214a2a88dba543700fd4e3965df181d2f90a9384e93e3f6aa84d897457"
+    ],
+    "expected_answer_keywords": ["lumbar puncture", "invasive", "side effects", "follow-up", "blood biomarkers", "Ab", "tau"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "discussion", "topic": "CSF limitations", "difficulty": "easy"}
+  },
+  {
+    "query": "How do platelet APP subtypes serve as peripheral blood biomarkers in Alzheimer's disease and what diagnostic performance has been reported?",
+    "relevant_chunk_ids": [
+      "cba6406d9d13aeac850f23222a566dc0fe96c74a8423519c1095de2611e28f8f",
+      "c959153435f0e2843fabc2a356db56e28641ce07dcdce7f009ea2aa2a86dc85b"
+    ],
+    "expected_answer_keywords": ["APP", "130-kDa", "platelets", "sensitivity", "specificity", "cut-off", "0.6"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "results", "topic": "platelet APP biomarker", "difficulty": "hard"}
+  },
+  {
+    "query": "What neuroinflammatory blood markers have been studied for Alzheimer's disease and how were they identified?",
+    "relevant_chunk_ids": [
+      "ec261bdb4f3508f9b7e3479e4910075ff54389e780111fc5804be24e591ceda6",
+      "fedbdd415d3eff259fefa2021e94285288f7700e3b2a326c827ff7b43b78c577"
+    ],
+    "expected_answer_keywords": ["cytokines", "18 biomarkers", "microglia", "neuroinflammation", "signalling proteins", "ELISA"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "methodology", "topic": "inflammatory markers", "difficulty": "hard"}
+  },
+  {
+    "query": "How do CSF Ab(1-42), total tau, and phospho-tau-181 levels differ between Alzheimer's disease and other central nervous system diseases?",
+    "relevant_chunk_ids": [
+      "0827155a708d3df0ef2b531fe4aba4f2710c9135f31e14694909640100220c9f",
+      "bdcfe2290a0fb652b94470e537cb2d3d11d072129d2ecde791ae983ecbde5fe3"
+    ],
+    "expected_answer_keywords": ["CJD", "LBD", "FTLD", "depression", "decrease", "increase", "Table"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "results", "topic": "differential diagnosis", "difficulty": "medium"}
+  },
+  {
+    "query": "What future challenges and requirements are described for developing a reliable Alzheimer's disease diagnostic assay?",
+    "relevant_chunk_ids": [
+      "d2cfd6ed3fe0d7e89708d84f74ca445f7f205ea8eb886ae1498198097176e588",
+      "0d386d5b4a922bc9f8395df3a9f6bbc3953d1c4606bc7632a27c4d4ed1cf6c0b"
+    ],
+    "expected_answer_keywords": ["multicenter", "independent", "consensus", "blood biomarkers", "combination", "early"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "discussion", "topic": "future challenges", "difficulty": "medium"}
+  },
+  {
+    "query": "What is the projected global prevalence of Alzheimer's disease by 2050 and why does it make biomarker discovery urgent?",
+    "relevant_chunk_ids": [
+      "3d874989fac4b9cd89a1e7ba47fffba00b2bcb4c7b820b00f0a1fa5ef6f649be",
+      "f987faf6f14aad26daef9d69f70d9f2aafa33feb96980cf66f1d1a3483638159"
+    ],
+    "expected_answer_keywords": ["80 million", "2050", "surrogate markers", "neurodegenerative", "sporadic", "memory"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "background", "topic": "AD epidemiology", "difficulty": "easy"}
+  },
+  {
+    "query": "Why has no single CSF biomarker beyond Ab(1-42), total tau and phospho-tau-181 been validated for routine AD diagnosis?",
+    "relevant_chunk_ids": [
+      "5ee409b5c9986ac04c0e3af7088d34b84b8dbe5509f1923a9fbc8938537e4afe"
+    ],
+    "expected_answer_keywords": ["heterogeneous", "validated", "routine", "single biomarker", "changes"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "discussion", "topic": "other CSF biomarkers", "difficulty": "medium"}
+  },
+  {
+    "query": "What does the Ab42/Ab40 ratio add to AD diagnosis compared to measuring Ab(1-42) alone?",
+    "relevant_chunk_ids": [
+      "fea26da52169ae5e0e893e677f089cc0c7d5fec3f0e8044c7e925633be15d905"
+    ],
+    "expected_answer_keywords": ["Ab42/Ab40 ratio", "Ab(1-40)", "unchanged", "oligomers", "diagnostic specificity"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "methodology", "topic": "Ab ratio", "difficulty": "hard"}
+  },
+  {
+    "query": "What is the estimated cost per patient of a standard CSF ELISA panel for AD and why is a cheaper alternative needed?",
+    "relevant_chunk_ids": [
+      "413181991a87c9bb8d2942f00acf0468bd42ef84f385f4c8409ef3f48425686b",
+      "cba10abca9bdfeab1b836ee6089cb09907ecc845d8ea03ddef22a8cfa369d9c2"
+    ],
+    "expected_answer_keywords": ["ELISA", "68", "900", "cost", "cheaper", "10", "patient"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "discussion", "topic": "assay cost", "difficulty": "easy"}
+  },
+  {
+    "query": "How does the paper propose combining genomics and proteomics to advance multi-biomarker AD signature discovery?",
+    "relevant_chunk_ids": [
+      "57ffb670dd7a4286358787fe2d19d1adebd3c2e1a1b5c7cd427ae0ccda3dad4e",
+      "9189d32d8995edbeafcadc9f55168b5709eb2dbc7b4a321a6183385829e32d7e"
+    ],
+    "expected_answer_keywords": ["genomics", "proteomics", "high-throughput", "multi-biomarker", "proteins", "genes"],
+    "namespace": "Alzheimer's disease",
+    "metadata": {"category": "methodology", "topic": "multi-biomarker signatures", "difficulty": "hard"}
+  }
+]

@@ -13,6 +13,10 @@ beautifulsoup4==4.14.3
 blis==0.7.11
 camelot-py==0.11.0
 catalogue==2.0.10
+# cdlib was missing from this pip-freeze despite being imported by
+# src/graphrag (community detection) — added unpinned; pin via
+# `pip-compile requirements.in` once resolved against the rest of the stack.
+cdlib
 certifi==2026.2.25
 cffi==2.0.0
 chardet==7.4.3

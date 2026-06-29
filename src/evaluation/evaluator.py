@@ -3,29 +3,31 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import openai
-
-from ragas import evaluate
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from ragas import RunConfig, evaluate
 from ragas.dataset_schema import EvaluationDataset, SingleTurnSample
-from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
+from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import (
-    faithfulness,
     answer_relevancy,
     context_precision,
     context_recall,
+    faithfulness,
 )
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from src.config.settings import get_config, get_secrets
 from src.utils.logger import get_logger
 
+_RAGAS_RUN_CONFIG = RunConfig(timeout=30, max_retries=1, max_wait=10)
+
 logger = get_logger(__name__)
 
 _RAGAS_METRICS = [faithfulness, answer_relevancy, context_precision, context_recall]
+
 
 @dataclass
 class RetrievalMetrics:
@@ -35,10 +37,12 @@ class RetrievalMetrics:
     context_precision: float = 0.0
     context_recall: float = 0.0
 
+
 @dataclass
 class GenerationMetrics:
     faithfulness: float = 0.0
     answer_relevancy: float = 0.0
+
 
 @dataclass
 class EvaluationReport:
@@ -46,13 +50,15 @@ class EvaluationReport:
     answer: str
     retrieval: RetrievalMetrics = field(default_factory=RetrievalMetrics)
     generation: GenerationMetrics = field(default_factory=GenerationMetrics)
-    ragas_scores: Dict[str, float] = field(default_factory=dict)
-    custom_judge_scores: Dict[str, float] = field(default_factory=dict)
+    ragas_scores: dict[str, float] = field(default_factory=dict)
+    custom_judge_scores: dict[str, float] = field(default_factory=dict)
     overall_score: float = 0.0
 
-def _avg(values: List[float]) -> float:
+
+def _avg(values: list[float]) -> float:
     valid = [v for v in values if v is not None]
     return sum(valid) / len(valid) if valid else 0.0
+
 
 def _reset_ragas_state(metrics) -> None:
     for m in metrics:
@@ -61,7 +67,8 @@ def _reset_ragas_state(metrics) -> None:
         if hasattr(m, "embeddings"):
             m.embeddings = None
 
-def _report_from_scores(query: str, answer: str, scores: Dict[str, float]) -> EvaluationReport:
+
+def _report_from_scores(query: str, answer: str, scores: dict[str, float]) -> EvaluationReport:
     report = EvaluationReport(query=query, answer=answer)
     report.ragas_scores = scores
     report.generation.faithfulness = scores.get("faithfulness", 0.0)
@@ -70,6 +77,7 @@ def _report_from_scores(query: str, answer: str, scores: Dict[str, float]) -> Ev
     report.retrieval.context_recall = scores.get("context_recall", 0.0)
     report.overall_score = _avg(list(scores.values()))
     return report
+
 
 def _log_batch_summary(report: EvaluationReport) -> None:
     logger.info(
@@ -87,6 +95,7 @@ def _log_batch_summary(report: EvaluationReport) -> None:
         report.overall_score,
         "=" * 50,
     )
+
 
 class RAGEvaluator:
     def __init__(self) -> None:
@@ -109,15 +118,15 @@ class RAGEvaluator:
             )
         )
 
-        self._reference_embeddings: List[np.ndarray] = []
+        self._reference_embeddings: list[np.ndarray] = []
         self._reference_window = self._eval_cfg["drift_detection"]["reference_window"]
 
     def evaluate_online(
         self,
         query: str,
         answer: str,
-        context_texts: List[str],
-        ground_truth: Optional[str] = None,
+        context_texts: list[str],
+        ground_truth: str | None = None,
     ) -> EvaluationReport:
         """Route to the configured evaluation method(s) at inference time."""
         if not self._judge_enabled:
@@ -153,14 +162,15 @@ class RAGEvaluator:
             embeddings=self._ragas_embeddings,
             raise_exceptions=False,
             show_progress=show_progress,
+            run_config=_RAGAS_RUN_CONFIG,
         )
 
     def evaluate_with_ragas(
         self,
         query: str,
         answer: str,
-        context_texts: List[str],
-        ground_truth: Optional[str] = None,
+        context_texts: list[str],
+        ground_truth: str | None = None,
     ) -> EvaluationReport:
         if not self._judge_enabled:
             return EvaluationReport(query=query, answer=answer)
@@ -183,8 +193,8 @@ class RAGEvaluator:
 
     def evaluate_batch_with_ragas(
         self,
-        samples: List[Dict[str, Any]],
-    ) -> List[EvaluationReport]:
+        samples: list[dict[str, Any]],
+    ) -> list[EvaluationReport]:
         ragas_samples = [
             SingleTurnSample(
                 user_input=s["query"],
@@ -219,7 +229,7 @@ class RAGEvaluator:
         self,
         query: str,
         answer: str,
-        context_texts: List[str],
+        context_texts: list[str],
     ) -> EvaluationReport:
         report = EvaluationReport(query=query, answer=answer)
 
@@ -254,17 +264,19 @@ class RAGEvaluator:
                 c: float(parsed[c]["score"]) for c in criteria if c in parsed
             }
             report.overall_score = _avg(list(report.custom_judge_scores.values()))
-            logger.info("Custom judge: overall=%.2f", report.overall_score, extra=report.custom_judge_scores)
-        except (json.JSONDecodeError, Exception) as exc:
+            logger.info(
+                "Custom judge: overall=%.2f", report.overall_score, extra=report.custom_judge_scores
+            )
+        except Exception as exc:
             logger.error("Custom judge failed: %s", exc)
 
         return report
 
-    def generate_synthetic_qa(self, chunk_text: str, n: int = 3) -> List[Dict[str, str]]:
+    def generate_synthetic_qa(self, chunk_text: str, n: int = 3) -> list[dict[str, str]]:
         prompt = (
             f"Generate {n} diverse, specific question-answer pairs from the passage below. "
             "Answers must be fully grounded in the passage text. "
-            "Return ONLY valid JSON: [{\"question\": \"...\", \"answer\": \"...\"}, ...]\n\n"
+            'Return ONLY valid JSON: [{"question": "...", "answer": "..."}, ...]\n\n'
             f"Passage: {chunk_text[:1000]}"
         )
         try:
@@ -279,22 +291,26 @@ class RAGEvaluator:
             logger.warning("Synthetic QA generation failed: %s", exc)
             return []
 
-    def build_synthetic_eval_batch(self, chunks: List[str], n_per_chunk: int = 3) -> List[Dict[str, Any]]:
+    def build_synthetic_eval_batch(
+        self, chunks: list[str], n_per_chunk: int = 3
+    ) -> list[dict[str, Any]]:
         samples = []
         for chunk in chunks:
             for pair in self.generate_synthetic_qa(chunk, n=n_per_chunk):
-                samples.append({
-                    "query": pair["question"],
-                    "answer": pair["answer"],
-                    "context_texts": [chunk],
-                    "ground_truth": pair["answer"],
-                })
+                samples.append(
+                    {
+                        "query": pair["question"],
+                        "answer": pair["answer"],
+                        "context_texts": [chunk],
+                        "ground_truth": pair["answer"],
+                    }
+                )
         return samples
 
     def evaluate_retrieval(
         self,
-        retrieved_ids: List[str],
-        relevant_ids: List[str],
+        retrieved_ids: list[str],
+        relevant_ids: list[str],
         k: int = 10,
     ) -> RetrievalMetrics:
         retrieved_k = retrieved_ids[:k]
@@ -318,7 +334,9 @@ class RAGEvaluator:
         ndcg = dcg / idcg if idcg > 0 else 0.0
 
         metrics = RetrievalMetrics(recall_at_k=recall_at_k, ndcg=ndcg, mrr=mrr)
-        logger.info("Retrieval metrics: recall@%d=%.3f NDCG=%.3f MRR=%.3f", k, recall_at_k, ndcg, mrr)
+        logger.info(
+            "Retrieval metrics: recall@%d=%.3f NDCG=%.3f MRR=%.3f", k, recall_at_k, ndcg, mrr
+        )
         return metrics
 
     def update_reference_distribution(self, query_embedding: np.ndarray) -> None:
@@ -330,13 +348,9 @@ class RAGEvaluator:
             recent = self._reference_embeddings[-20:]
             drifted, score = self.detect_drift(recent)
             if drifted:
-                logger.warning(
-                    "Query distribution drift detected (score=%.3f) — "
-                    "knowledge base may need updating.",
-                    score,
-                )
+                logger.warning("Query drift detected: score=%.3f", score)
 
-    def detect_drift(self, recent_embeddings: List[np.ndarray]) -> Tuple[bool, float]:
+    def detect_drift(self, recent_embeddings: list[np.ndarray]) -> tuple[bool, float]:
         drift_cfg = self._eval_cfg["drift_detection"]
 
         if not drift_cfg["enabled"] or len(self._reference_embeddings) < 50:
@@ -355,7 +369,8 @@ class RAGEvaluator:
         if drift_detected:
             logger.warning(
                 "Query drift detected: divergence=%.3f > threshold=%.3f",
-                divergence, threshold,
+                divergence,
+                threshold,
                 extra={"divergence": divergence, "threshold": threshold},
             )
         else:

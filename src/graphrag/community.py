@@ -1,22 +1,21 @@
-
 from __future__ import annotations
 
 import hashlib
-import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import networkx as nx
 import openai
 
 from src.config.settings import get_config, get_secrets
-from src.graphrag.schema import CommunityNode, EntityType
 from src.graphrag.neo4j_store import Neo4jGraphStore
+from src.graphrag.schema import CommunityNode
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 try:
     import community as community_louvain  # type: ignore  # python-louvain
+
     _LOUVAIN_AVAILABLE = True
 except ImportError:
     _LOUVAIN_AVAILABLE = False
@@ -24,6 +23,7 @@ except ImportError:
 
 try:
     from cdlib import algorithms as cdlib_algos  # type: ignore
+
     _CDLIB_AVAILABLE = True
 except ImportError:
     _CDLIB_AVAILABLE = False
@@ -48,48 +48,28 @@ Entities in this community:
 Write a thematic summary of this community.
 """
 
+
 class CommunityDetector:
-    """
-    Builds community structure on the entity graph and stores summaries
-    back into Neo4j.
-
-    Typical usage (called from the ingestion pipeline after all entities
-    have been written to Neo4j)::
-
-        detector = CommunityDetector(graph_store)
-        detector.run()
-    """
+    """Detects communities in the entity graph and writes summaries back to Neo4j."""
 
     def __init__(self, graph_store: Neo4jGraphStore) -> None:
         cfg = get_config()
         sec = get_secrets()
         self._store = graph_store
-        self._gr_cfg: Dict[str, Any] = cfg.get("graphrag", {})
-        self._community_cfg: Dict[str, Any] = self._gr_cfg.get("community", {})
-        self._min_community_size: int = self._community_cfg.get(
-            "min_community_size", 3
-        )
-        self._resolution_levels: List[float] = self._community_cfg.get(
+        self._gr_cfg: dict[str, Any] = cfg.get("graphrag", {})
+        self._community_cfg: dict[str, Any] = self._gr_cfg.get("community", {})
+        self._min_community_size: int = self._community_cfg.get("min_community_size", 3)
+        self._resolution_levels: list[float] = self._community_cfg.get(
             "resolution_levels", [1.0, 0.5]  # level 0 = fine, level 1 = coarse
         )
-        self._summary_model: str = self._community_cfg.get(
-            "summary_model", "gpt-4o"
-        )
+        self._summary_model: str = self._community_cfg.get("summary_model", "gpt-4o")
         self._max_entities_per_summary: int = self._community_cfg.get(
             "max_entities_per_summary", 30
         )
         self._openai = openai.OpenAI(api_key=sec.openai_api_key)
 
-    def run(self) -> Dict[str, int]:
-        """
-        Full community detection pass:
-        1. Pull entity graph from Neo4j
-        2. Detect communities at each resolution level
-        3. Generate LLM summaries for leaf communities
-        4. Store community nodes and membership edges back to Neo4j
-
-        Returns stats: {total_communities, entities_assigned, levels_run}
-        """
+    def run(self) -> dict[str, int]:
+        """Run full community detection and return stats {total_communities, entities_assigned, levels_run}."""
         logger.info("Community detection started")
 
         nodes = self._store.get_all_entities()
@@ -100,9 +80,7 @@ class CommunityDetector:
             return {"total_communities": 0, "entities_assigned": 0, "levels_run": 0}
 
         G = self._build_graph(nodes, edges)
-        logger.info(
-            "Graph built: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges()
-        )
+        logger.info("Graph built: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
 
         stats = {"total_communities": 0, "entities_assigned": 0, "levels_run": 0}
 
@@ -119,19 +97,19 @@ class CommunityDetector:
 
             logger.info(
                 "Level %d (resolution=%.2f): %d communities (≥%d members)",
-                level, resolution, len(communities), self._min_community_size,
+                level,
+                resolution,
+                len(communities),
+                self._min_community_size,
             )
 
             for cid_local, member_node_ids in communities.items():
                 community_id = self._stable_community_id(level, cid_local)
 
-                # Resolve entity metadata from node list for summary generation
-                member_meta = [
-                    n for n in nodes if n["node_id"] in member_node_ids
-                ]
+                member_meta = [n for n in nodes if n["node_id"] in member_node_ids]
 
                 summary, title = None, None
-                if level == 0:  # Only summarise leaf-level communities
+                if level == 0:
                     summary, title = self._generate_summary(member_meta)
 
                 community = CommunityNode(
@@ -151,13 +129,8 @@ class CommunityDetector:
         return stats
 
     @staticmethod
-    def _build_graph(
-        nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]
-    ) -> nx.Graph:
-        """
-        Build an undirected weighted NetworkX graph from entity nodes
-        and relationship edges.
-        """
+    def _build_graph(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> nx.Graph:
+        """Build an undirected weighted NetworkX graph from entity nodes and relationship edges."""
         G: nx.Graph = nx.Graph()
         for node in nodes:
             G.add_node(node["node_id"], **node)
@@ -172,14 +145,8 @@ class CommunityDetector:
                     G.add_edge(src, tgt, weight=w)
         return G
 
-    def _detect(
-        self, G: nx.Graph, resolution: float = 1.0
-    ) -> Dict[str, set]:
-        """
-        Detect communities and return {community_label → set(node_ids)}.
-
-        Priority: Leiden (cdlib) > Louvain (python-louvain) > connected-components.
-        """
+    def _detect(self, G: nx.Graph, resolution: float = 1.0) -> dict[str, set]:
+        """Detect communities and return {community_label → set(node_ids)}."""
         if _CDLIB_AVAILABLE:
             return self._detect_leiden(G, resolution)
         elif _LOUVAIN_AVAILABLE:
@@ -188,51 +155,40 @@ class CommunityDetector:
             return self._detect_components(G)
 
     @staticmethod
-    def _detect_louvain(G: nx.Graph, resolution: float) -> Dict[str, set]:
+    def _detect_louvain(G: nx.Graph, resolution: float) -> dict[str, set]:
         """Louvain community detection."""
-        partition: Dict[str, int] = community_louvain.best_partition(
+        partition: dict[str, int] = community_louvain.best_partition(
             G, weight="weight", resolution=resolution
         )
-        communities: Dict[str, set] = {}
+        communities: dict[str, set] = {}
         for node_id, comm_id in partition.items():
             communities.setdefault(str(comm_id), set()).add(node_id)
         return communities
 
     @staticmethod
-    def _detect_leiden(G: nx.Graph, resolution: float) -> Dict[str, set]:
+    def _detect_leiden(G: nx.Graph, resolution: float) -> dict[str, set]:
         """Leiden community detection (more stable than Louvain)."""
         result = cdlib_algos.leiden(G, weights="weight")  # type: ignore
-        communities: Dict[str, set] = {}
+        communities: dict[str, set] = {}
         for i, community_list in enumerate(result.communities):
             communities[str(i)] = set(community_list)
         return communities
 
     @staticmethod
-    def _detect_components(G: nx.Graph) -> Dict[str, set]:
+    def _detect_components(G: nx.Graph) -> dict[str, set]:
         """Fallback: use connected components (low quality but always available)."""
         logger.warning("Using connected-components as community detection fallback")
-        return {
-            str(i): set(comp)
-            for i, comp in enumerate(nx.connected_components(G))
-        }
+        return {str(i): set(comp) for i, comp in enumerate(nx.connected_components(G))}
 
-    def _generate_summary(
-        self, member_meta: List[Dict[str, Any]]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Ask the LLM to produce a thematic summary and title for a community.
-
-        Returns (summary_text, title_text).
-        Failures return (None, None) — non-fatal.
-        """
+    def _generate_summary(self, member_meta: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+        """Generate a thematic LLM summary and title for a community; returns (None, None) on failure."""
         if not member_meta:
             return None, None
 
         # Truncate large communities to keep the prompt manageable
         sample = member_meta[: self._max_entities_per_summary]
         entity_list = "\n".join(
-            f"- {m['name']} ({m.get('entity_type', 'UNKNOWN')})"
-            for m in sample
+            f"- {m['name']} ({m.get('entity_type', 'UNKNOWN')})" for m in sample
         )
 
         try:
@@ -242,9 +198,7 @@ class CommunityDetector:
                     {"role": "system", "content": _COMMUNITY_SUMMARY_SYSTEM},
                     {
                         "role": "user",
-                        "content": _COMMUNITY_SUMMARY_USER.format(
-                            entity_list=entity_list
-                        ),
+                        "content": _COMMUNITY_SUMMARY_USER.format(entity_list=entity_list),
                     },
                 ],
                 temperature=0.0,
@@ -252,7 +206,6 @@ class CommunityDetector:
             )
             summary = response.choices[0].message.content.strip()
 
-            # Extract a short title (first sentence or first 80 chars)
             title = summary.split(".")[0].strip()[:80] if summary else None
             return summary, title
 
@@ -262,9 +215,6 @@ class CommunityDetector:
 
     @staticmethod
     def _stable_community_id(level: int, local_id: str) -> str:
-        """
-        Generate a stable, deterministic community_id from level + local partition id.
-        Using SHA-256 ensures cross-run stability when the graph hasn't changed.
-        """
+        """Generate a stable deterministic community_id from level + partition id via SHA-256."""
         key = f"community::level{level}::{local_id}"
         return hashlib.sha256(key.encode()).hexdigest()

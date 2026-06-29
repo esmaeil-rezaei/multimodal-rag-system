@@ -1,0 +1,44 @@
+# Pre-commit hooks for linting, formatting, and type-checking.
+#
+# Setup:
+#     pip install -r requirements-dev.txt
+#     pre-commit install
+#
+# Run manually against all files:
+#     pre-commit run --all-files
+#
+# Tool configuration (ruff, black, mypy) lives in pyproject.toml;
+# pytest configuration lives in pytest.ini.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - types-PyYAML==6.0.12.20250915
+          - types-requests==2.33.0.20260408
+        args: [--ignore-missing-imports]
+        exclude: ^(tools/|scripts/)
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1000]

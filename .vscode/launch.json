@@ -6,6 +6,10 @@
       "type": "python",
       "request": "launch",
       "module": "scripts.query",
+      "args": [
+        "--namespace",
+        "Project_MDLC"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": false

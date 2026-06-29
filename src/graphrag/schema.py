@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import hashlib
@@ -6,11 +5,12 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from typing import Any
 
 from src.config.settings import get_config
 
 logger = logging.getLogger(__name__)
+
 
 class EntityType(str, Enum):
     """
@@ -24,10 +24,11 @@ class EntityType(str, Enum):
     only as a Python fallback so callers always get a valid EntityType back.
     """
 
-    CHUNK       = "CHUNK"       # every ingested text chunk as a node
-    DOCUMENT    = "DOCUMENT"    # source-document root node
-    COMMUNITY   = "COMMUNITY"   # community cluster node
-    UNKNOWN     = "UNKNOWN"     # catch-all for unrecognised LLM output
+    CHUNK = "CHUNK"  # every ingested text chunk as a node
+    DOCUMENT = "DOCUMENT"  # source-document root node
+    COMMUNITY = "COMMUNITY"  # community cluster node
+    UNKNOWN = "UNKNOWN"  # catch-all for unrecognised LLM output
+
 
 class RelationshipType(str, Enum):
     """
@@ -40,12 +41,13 @@ class RelationshipType(str, Enum):
     don't match any registered label.
     """
 
-    MENTIONS             = "MENTIONS"             # Chunk → Entity
-    PART_OF              = "PART_OF"              # Chunk → Document
-    BELONGS_TO_COMMUNITY = "BELONGS_TO_COMMUNITY" # Entity → Community
-    CO_OCCURS_WITH       = "CO_OCCURS_WITH"        # Entity ↔ Entity (co-occurrence)
+    MENTIONS = "MENTIONS"  # Chunk → Entity
+    PART_OF = "PART_OF"  # Chunk → Document
+    BELONGS_TO_COMMUNITY = "BELONGS_TO_COMMUNITY"  # Entity → Community
+    CO_OCCURS_WITH = "CO_OCCURS_WITH"  # Entity ↔ Entity (co-occurrence)
 
-    RELATED_TO           = "RELATED_TO"           # catch-all for unrecognised LLM output
+    RELATED_TO = "RELATED_TO"  # catch-all for unrecognised LLM output
+
 
 class EntityTypeRegistry:
     """
@@ -75,14 +77,22 @@ class EntityTypeRegistry:
 
     # Default seed labels that cover the majority of general-purpose deployments.
     # These are only used if config.yaml does not specify entity_types at all.
-    _DEFAULT_SEEDS: FrozenSet[str] = frozenset({
-        "PERSON", "ORGANIZATION", "LOCATION", "DATE",
-        "EVENT", "PRODUCT", "TECHNOLOGY", "CONCEPT",
-    })
+    _DEFAULT_SEEDS: frozenset[str] = frozenset(
+        {
+            "PERSON",
+            "ORGANIZATION",
+            "LOCATION",
+            "DATE",
+            "EVENT",
+            "PRODUCT",
+            "TECHNOLOGY",
+            "CONCEPT",
+        }
+    )
 
     def __init__(self) -> None:
         # Start with infrastructure labels always present.
-        self._labels: Set[str] = {e.value for e in EntityType}
+        self._labels: set[str] = {e.value for e in EntityType}
 
     def register(self, *labels: str) -> None:
         """
@@ -105,7 +115,7 @@ class EntityTypeRegistry:
                 self._labels.add(label)
                 logger.debug("EntityTypeRegistry: registered '%s'", label)
 
-    def load_from_config(self, config_entity_types: Optional[List[str]]) -> None:
+    def load_from_config(self, config_entity_types: list[str] | None) -> None:
         """
         Bulk-register labels from the ``graphrag.entity_types`` config list.
 
@@ -143,12 +153,10 @@ class EntityTypeRegistry:
         normalised = raw_label.strip().upper()
         if normalised in self._labels:
             return normalised
-        logger.debug(
-            "EntityTypeRegistry: unrecognised label '%s' → UNKNOWN", raw_label
-        )
+        logger.debug("EntityTypeRegistry: unrecognised label '%s' → UNKNOWN", raw_label)
         return EntityType.UNKNOWN.value
 
-    def all_labels(self) -> List[str]:
+    def all_labels(self) -> list[str]:
         """
         Return all registered labels sorted alphabetically.
 
@@ -175,6 +183,7 @@ class EntityTypeRegistry:
     def __repr__(self) -> str:
         return f"EntityTypeRegistry({sorted(self._labels)})"
 
+
 class RelationshipTypeRegistry:
     """
     Open-world registry for domain relationship type labels.
@@ -188,16 +197,28 @@ class RelationshipTypeRegistry:
     in config for domain-specific systems.
     """
 
-    _DEFAULT_SEEDS: FrozenSet[str] = frozenset({
-        "WORKS_FOR", "LOCATED_IN", "FOUNDED_BY", "OWNS",
-        "PRODUCES", "CAUSES", "INTERACTS_WITH", "REGULATES",
-        "CITES", "SUCCEEDED_BY", "PRECEDED_BY",
-        "HAPPENED_ON", "STARTED_ON", "ENDED_ON",
-    })
+    _DEFAULT_SEEDS: frozenset[str] = frozenset(
+        {
+            "WORKS_FOR",
+            "LOCATED_IN",
+            "FOUNDED_BY",
+            "OWNS",
+            "PRODUCES",
+            "CAUSES",
+            "INTERACTS_WITH",
+            "REGULATES",
+            "CITES",
+            "SUCCEEDED_BY",
+            "PRECEDED_BY",
+            "HAPPENED_ON",
+            "STARTED_ON",
+            "ENDED_ON",
+        }
+    )
 
     def __init__(self) -> None:
         # Structural labels always present.
-        self._labels: Set[str] = {r.value for r in RelationshipType}
+        self._labels: set[str] = {r.value for r in RelationshipType}
 
     def register(self, *labels: str) -> None:
         """Register one or more semantic relationship type labels."""
@@ -207,7 +228,7 @@ class RelationshipTypeRegistry:
                 self._labels.add(label)
                 logger.debug("RelationshipTypeRegistry: registered '%s'", label)
 
-    def load_from_config(self, config_rel_types: Optional[List[str]]) -> None:
+    def load_from_config(self, config_rel_types: list[str] | None) -> None:
         """
         Bulk-register labels from ``graphrag.relationship_types``.
         Falls back to default seeds if list is empty/None.
@@ -234,7 +255,7 @@ class RelationshipTypeRegistry:
         )
         return RelationshipType.RELATED_TO.value
 
-    def all_labels(self) -> List[str]:
+    def all_labels(self) -> list[str]:
         """
         All labels except purely structural ones that the LLM should never produce.
         """
@@ -255,6 +276,7 @@ class RelationshipTypeRegistry:
     def __repr__(self) -> str:
         return f"RelationshipTypeRegistry({sorted(self._labels)})"
 
+
 #: Global entity type registry.  Populated at startup via
 #: ``entity_type_registry.load_from_config(...)``.
 entity_type_registry = EntityTypeRegistry()
@@ -262,6 +284,7 @@ entity_type_registry = EntityTypeRegistry()
 #: Global relationship type registry.  Populated at startup via
 #: ``relationship_type_registry.load_from_config(...)``.
 relationship_type_registry = RelationshipTypeRegistry()
+
 
 def bootstrap_registries() -> None:
     """
@@ -280,11 +303,9 @@ def bootstrap_registries() -> None:
     """
     try:
         cfg = get_config()
-        gr_cfg: Dict[str, Any] = cfg.get("graphrag", {})
+        gr_cfg: dict[str, Any] = cfg.get("graphrag", {})
 
-        entity_type_registry.load_from_config(
-            gr_cfg.get("entity_types")  # None → use defaults
-        )
+        entity_type_registry.load_from_config(gr_cfg.get("entity_types"))  # None → use defaults
         relationship_type_registry.load_from_config(
             gr_cfg.get("relationship_types")  # None → use defaults
         )
@@ -294,11 +315,10 @@ def bootstrap_registries() -> None:
             len(relationship_type_registry),
         )
     except Exception as exc:
-        logger.error(
-            "Registry bootstrap failed — falling back to seed defaults: %s", exc
-        )
+        logger.error("Registry bootstrap failed — falling back to seed defaults: %s", exc)
         entity_type_registry.load_from_config(None)
         relationship_type_registry.load_from_config(None)
+
 
 @dataclass
 class EntityNode:
@@ -317,13 +337,13 @@ class EntityNode:
     """
 
     name: str
-    entity_type: str                      # validated registry label string
+    entity_type: str  # validated registry label string
 
-    description: Optional[str] = None
-    source_chunks: List[str] = field(default_factory=list)
-    embedding: Optional[List[float]] = None
+    description: str | None = None
+    source_chunks: list[str] = field(default_factory=list)
+    embedding: list[float] | None = None
     confidence: float = 1.0
-    properties: Dict[str, Any] = field(default_factory=dict)
+    properties: dict[str, Any] = field(default_factory=dict)
 
     node_id: str = field(init=False)
 
@@ -344,6 +364,7 @@ class EntityNode:
     def touch(self) -> None:
         self.updated_at = datetime.utcnow().isoformat()
 
+
 @dataclass
 class RelationshipEdge:
     """
@@ -358,12 +379,12 @@ class RelationshipEdge:
 
     source_id: str
     target_id: str
-    relation_type: str                    # validated registry label string
+    relation_type: str  # validated registry label string
 
-    description: Optional[str] = None
+    description: str | None = None
     weight: float = 1.0
-    source_chunks: List[str] = field(default_factory=list)
-    properties: Dict[str, Any] = field(default_factory=dict)
+    source_chunks: list[str] = field(default_factory=list)
+    properties: dict[str, Any] = field(default_factory=dict)
 
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
@@ -372,9 +393,7 @@ class RelationshipEdge:
 
     def __post_init__(self) -> None:
         self.relation_type = relationship_type_registry.resolve(self.relation_type)
-        self.edge_id = self._compute_id(
-            self.source_id, self.relation_type, self.target_id
-        )
+        self.edge_id = self._compute_id(self.source_id, self.relation_type, self.target_id)
 
     @staticmethod
     def _compute_id(source_id: str, relation_type: str, target_id: str) -> str:
@@ -383,6 +402,7 @@ class RelationshipEdge:
 
     def touch(self) -> None:
         self.updated_at = datetime.utcnow().isoformat()
+
 
 @dataclass
 class CommunityNode:
@@ -396,11 +416,12 @@ class CommunityNode:
 
     community_id: str
     level: int
-    member_ids: List[str]
-    summary: Optional[str] = None
-    embedding: Optional[List[float]] = None
-    title: Optional[str] = None
+    member_ids: list[str]
+    summary: str | None = None
+    embedding: list[float] | None = None
+    title: str | None = None
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
 
 @dataclass
 class ExtractionResult:
@@ -412,8 +433,8 @@ class ExtractionResult:
     """
 
     chunk_id: str
-    entities: List[EntityNode] = field(default_factory=list)
-    relationships: List[RelationshipEdge] = field(default_factory=list)
+    entities: list[EntityNode] = field(default_factory=list)
+    relationships: list[RelationshipEdge] = field(default_factory=list)
 
     model_used: str = ""
     prompt_tokens: int = 0

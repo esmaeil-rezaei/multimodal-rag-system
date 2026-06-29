@@ -7,7 +7,6 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import jwt
 from fastapi import FastAPI, HTTPException, status
@@ -16,25 +15,25 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from src.core.container import init_container, get_container
-from src.config.settings import get_config
-from src.indexing.vector_store import DenseVectorStore
 from app.auth import (
-    init_db,
-    register_user,
-    login_user,
-    decode_token,
-    RegisterRequest,
     LoginRequest,
+    RegisterRequest,
+    decode_token,
+    init_db,
+    login_user,
+    register_user,
 )
+from src.config.settings import get_config
+from src.core.container import get_container, init_container
+from src.indexing.vector_store import DenseVectorStore
 
 logger = logging.getLogger(__name__)
 
 _cfg = get_config()
 _log_cfg = _cfg.log
 
-UNKNOWN_LOG  = Path(_log_cfg["unknown_query_dir"])     / "unknown_queries.jsonl"
-LIKED_LOG    = Path(_log_cfg["liked_response_dir"])    / "liked_responses.jsonl"
+UNKNOWN_LOG = Path(_log_cfg["unknown_query_dir"]) / "unknown_queries.jsonl"
+LIKED_LOG = Path(_log_cfg["liked_response_dir"]) / "liked_responses.jsonl"
 DISLIKED_LOG = Path(_log_cfg["disliked_response_dir"]) / "disliked_responses.jsonl"
 
 for _p in (UNKNOWN_LOG, LIKED_LOG, DISLIKED_LOG):
@@ -53,20 +52,23 @@ _UNCERTAIN_PREFIXES: tuple[str, ...] = (
     "i could not find",
 )
 
-_session_histories: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+_session_histories: dict[str, list[dict[str, str]]] = defaultdict(list)
 
-def _get_history(session_id: str) -> List[Dict[str, str]]:
+
+def _get_history(session_id: str) -> list[dict[str, str]]:
     return _session_histories[session_id]
+
 
 def _append_history(session_id: str, question: str, answer: str) -> None:
     history = _session_histories[session_id]
-    history.append({"role": "user",      "content": question})
+    history.append({"role": "user", "content": question})
     history.append({"role": "assistant", "content": answer})
     max_messages = MAX_HISTORY_TURNS * 2
     if len(history) > max_messages:
         _session_histories[session_id] = history[-max_messages:]
 
-def _is_could_not_answer(answer: str, faithfulness: Optional[float]) -> bool:
+
+def _is_could_not_answer(answer: str, faithfulness: float | None) -> bool:
     """Return True when the model's answer signals insufficient context."""
     if not answer:
         return True
@@ -77,6 +79,7 @@ def _is_could_not_answer(answer: str, faithfulness: Optional[float]) -> bool:
         return True
     return False
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -84,6 +87,7 @@ async def lifespan(app: FastAPI):
     app.state.container = container
     yield
     container.shutdown()
+
 
 app = FastAPI(
     title="RAG Knowledge Assistant",
@@ -103,39 +107,45 @@ app.add_middleware(
 Path("artifacts").mkdir(exist_ok=True)
 app.mount("/artifacts", StaticFiles(directory="artifacts"), name="artifacts")
 
+
 def _write_jsonl(path: Path, record: dict) -> None:
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+
 class QueryRequest(BaseModel):
     question: str
-    session_id: Optional[str] = None
-    namespace: Optional[str] = None   # guest-selected namespace
-    token: Optional[str] = None        # JWT for authenticated users
+    session_id: str | None = None
+    namespace: str | None = None  # guest-selected namespace
+    token: str | None = None  # JWT for authenticated users
+
 
 class QueryResponse(BaseModel):
     query_id: str
     answer: str
     citations: list = []
-    faithfulness_score: Optional[float] = None
+    faithfulness_score: float | None = None
     has_conflict: bool = False
-    conflict_resolution: Optional[str] = None
+    conflict_resolution: str | None = None
     model_used: str = "unknown"
     could_not_answer: bool = False
-    namespace_used: Optional[str] = None
+    namespace_used: str | None = None
+
 
 class FeedbackRequest(BaseModel):
     query_id: str
     question: str
     answer: str
-    rating: str            # "like" | "dislike" | "unknown"
-    comment: Optional[str] = None
-    session_id: Optional[str] = None
+    rating: str  # "like" | "dislike" | "unknown"
+    comment: str | None = None
+    session_id: str | None = None
+
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def serve_ui():
     html_path = Path(__file__).parent / "ui.html"
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
 
 @app.post(
     "/auth/register",
@@ -146,22 +156,24 @@ async def auth_register(req: RegisterRequest):
     try:
         return register_user(req.username, req.password, req.namespace)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
-        )
+        ) from exc
+
 
 @app.post("/auth/login", summary="Authenticate and receive a JWT")
 async def auth_login(req: LoginRequest):
     try:
         return login_user(req.username, req.password)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
-        )
+        ) from exc
+
 
 @app.get("/namespaces", summary="List available knowledge-base namespaces")
 async def list_namespaces():
@@ -169,11 +181,11 @@ async def list_namespaces():
     kb_root = Path(_cfg.knowledge_base["root_dir"])
     if not kb_root.exists():
         return {"namespaces": []}
-    namespaces = sorted([
-        d.name for d in kb_root.iterdir()
-        if d.is_dir() and not d.name.startswith(".")
-    ])
+    namespaces = sorted(
+        [d.name for d in kb_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
+    )
     return {"namespaces": namespaces}
+
 
 @app.get("/chunk/{chunk_id}", summary="Retrieve chunk text for hover preview")
 async def get_chunk(chunk_id: str):
@@ -191,7 +203,7 @@ async def get_chunk(chunk_id: str):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not reach vector store.",
-        )
+        ) from exc
 
     if not points:
         raise HTTPException(
@@ -201,23 +213,24 @@ async def get_chunk(chunk_id: str):
 
     payload = points[0].payload or {}
     return {
-        "chunk_id":    chunk_id,
-        "text":        payload.get("text", ""),
+        "chunk_id": chunk_id,
+        "text": payload.get("text", ""),
         "source_file": payload.get("source_file", ""),
         "source_name": payload.get("source_name", ""),
-        "modality":    payload.get("modality", "text"),
-        "namespace":   payload.get("namespace", ""),
+        "modality": payload.get("modality", "text"),
+        "namespace": payload.get("namespace", ""),
     }
+
 
 @app.post("/query", response_model=QueryResponse, summary="Run a RAG query")
 async def run_query(req: QueryRequest):
-    query_id   = str(uuid.uuid4())
+    query_id = str(uuid.uuid4())
     session_id = req.session_id or "default"
-    history    = _get_history(session_id)
+    history = _get_history(session_id)
     orchestrator = get_container().orchestrator
 
     # Namespace resolution: JWT claim > explicit body param > None (orchestrator default)
-    namespace: Optional[str] = None
+    namespace: str | None = None
     if req.token:
         try:
             claims = decode_token(req.token)
@@ -244,14 +257,14 @@ async def run_query(req: QueryRequest):
     could_not_answer = _is_could_not_answer(result.answer, result.faithfulness_score)
 
     log_record = {
-        "query_id":           query_id,
-        "timestamp":          datetime.now(timezone.utc).isoformat(),
-        "question":           req.question,
-        "answer":             result.answer,
+        "query_id": query_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "question": req.question,
+        "answer": result.answer,
         "faithfulness_score": result.faithfulness_score,
-        "model_used":         result.model_used,
-        "session_id":         session_id,
-        "namespace":          namespace or "default",
+        "model_used": result.model_used,
+        "session_id": session_id,
+        "namespace": namespace or "default",
     }
     if could_not_answer:
         _write_jsonl(UNKNOWN_LOG, log_record)
@@ -270,16 +283,17 @@ async def run_query(req: QueryRequest):
         namespace_used=namespace or "default",
     )
 
+
 @app.post("/feedback", summary="Submit thumbs-up / thumbs-down feedback")
 async def submit_feedback(req: FeedbackRequest):
     ts = datetime.now(timezone.utc).isoformat()
     record = {
-        "query_id":   req.query_id,
-        "timestamp":  ts,
-        "question":   req.question,
-        "answer":     req.answer,
-        "rating":     req.rating,
-        "comment":    req.comment or "",
+        "query_id": req.query_id,
+        "timestamp": ts,
+        "question": req.question,
+        "answer": req.answer,
+        "rating": req.rating,
+        "comment": req.comment or "",
         "session_id": req.session_id or "",
     }
     if req.rating == "like":
@@ -290,14 +304,17 @@ async def submit_feedback(req: FeedbackRequest):
         _write_jsonl(UNKNOWN_LOG, {**record, "source": "user_flagged"})
     return {"status": "ok", "query_id": req.query_id}
 
+
 @app.delete("/session/{session_id}", summary="Clear conversation history")
 async def clear_session(session_id: str):
     _session_histories.pop(session_id, None)
     return {"status": "ok", "session_id": session_id}
 
+
 @app.get("/health", summary="Liveness probe")
 async def health():
     return {"status": "ok"}
+
 
 @app.get("/logs/summary", summary="Feedback log line counts")
 async def logs_summary():
@@ -305,8 +322,8 @@ async def logs_summary():
         return sum(1 for _ in p.open()) if p.exists() else 0
 
     return {
-        "liked":           count_lines(LIKED_LOG),
-        "disliked":        count_lines(DISLIKED_LOG),
-        "unknown":         count_lines(UNKNOWN_LOG),
+        "liked": count_lines(LIKED_LOG),
+        "disliked": count_lines(DISLIKED_LOG),
+        "unknown": count_lines(UNKNOWN_LOG),
         "active_sessions": len(_session_histories),
     }

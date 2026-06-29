@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import base64
@@ -6,7 +5,7 @@ import hashlib
 import mimetypes
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import camelot
 import openai
@@ -21,23 +20,26 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 @dataclass
 class ParsedChunk:
     """
     Metadata contract for the consolidator
     """
+
     text: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    chunk_id: Optional[str] = None
-    source_file: Optional[str] = None
-    source_name: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    chunk_id: str | None = None
+    source_file: str | None = None
+    source_name: str | None = None
     modality: str = "text"
-    language: Optional[str] = None
-    doc_version: Optional[str] = None
-    ingestion_ts: Optional[str] = None
+    language: str | None = None
+    doc_version: str | None = None
+    ingestion_ts: str | None = None
 
     def compute_fingerprint(self) -> str:
         return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
+
 
 class _HeadingTracker:
     """
@@ -46,7 +48,7 @@ class _HeadingTracker:
     """
 
     def __init__(self) -> None:
-        self._stack: List[Tuple[int, str]] = []
+        self._stack: list[tuple[int, str]] = []
 
     def push(self, depth: int, title: str) -> None:
         while self._stack and self._stack[-1][0] >= depth:
@@ -70,9 +72,9 @@ class _HeadingTracker:
 
 
 def _infer_depth_from_font_size(
-    title_elements: List[Element],
+    title_elements: list[Element],
     max_levels: int = 3,
-) -> Dict[int, int]:
+) -> dict[int, int]:
     """
     Infer heading depth from visual layout when metadata is missing.
 
@@ -83,7 +85,7 @@ def _infer_depth_from_font_size(
         {element_id: depth}
     """
 
-    heights: Dict[int, float] = {}
+    heights: dict[int, float] = {}
     for el in title_elements:
         meta = getattr(el, "metadata", None)
         coords = getattr(meta, "coordinates", None)
@@ -103,7 +105,7 @@ def _infer_depth_from_font_size(
     if n_levels == 0:
         return {}
     bucket_size = (unique_sorted[0] - unique_sorted[-1] + 1) / n_levels
-    depth_map: Dict[int, int] = {}
+    depth_map: dict[int, int] = {}
     for eid, h in heights.items():
         bucket = int((unique_sorted[0] - h) / max(bucket_size, 1e-9))
         depth_map[eid] = min(bucket + 1, max_levels)  # 1-indexed depth
@@ -122,7 +124,7 @@ class DocumentParser:
         self._ingest_cfg = self._cfg.ingestion
         self._openai = openai.OpenAI(api_key=self._sec.openai_api_key)
 
-    def parse_file(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
+    def parse_file(self, file_path: Path, source_name: str) -> list[ParsedChunk]:
         logger.info("Parsing file", extra={"file": str(file_path), "source": source_name})
         suffix = file_path.suffix.lower()
 
@@ -142,14 +144,10 @@ class DocumentParser:
             logger.warning(f"Unsupported extension: {suffix} for {file_path}")
             return []
 
-    def _parse_pdf(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
+    def _parse_pdf(self, file_path: Path, source_name: str) -> list[ParsedChunk]:
         """
         Parse PDF into chunked elements with hierarchical section metadata.
         Section context is derived using metadata when available, otherwise layout heuristics.
-
-        Images extracted from the PDF are saved to a subdirectory named after the source
-        document (``<image_output_dir>/<stem>/``) so images from different papers are
-        never mixed together in a single flat folder.
         """
         parsing_cfg = self._ingest_cfg["parsing"]
 
@@ -158,7 +156,7 @@ class DocumentParser:
         doc_image_dir = base_image_dir / file_path.stem
         doc_image_dir.mkdir(parents=True, exist_ok=True)
 
-        elements: List[Element] = partition_pdf(
+        elements: list[Element] = partition_pdf(
             filename=str(file_path),
             strategy=parsing_cfg["pdf_strategy"],
             languages=parsing_cfg["ocr_languages"],
@@ -170,20 +168,23 @@ class DocumentParser:
         fallback_depth_map = _infer_depth_from_font_size(title_elements)
 
         tracker = _HeadingTracker()
-        chunks: List[ParsedChunk] = []
+        chunks: list[ParsedChunk] = []
         # Map page_number → tracker snapshot, updated as we walk elements.
         # Used to assign correct section context to Camelot tables by page.
-        page_context: Dict[int, Dict[str, Any]] = {}
+        page_context: dict[int, dict[str, Any]] = {}
 
         for element in elements:
             # Record the current tracker state for this element's page.
             page_num = getattr(getattr(element, "metadata", None), "page_number", None)
             if page_num is not None:
-                page_context.setdefault(page_num, {
-                    "section": tracker.section,
-                    "section_depth": tracker.section_depth,
-                    "breadcrumb": tracker.breadcrumb,
-                })
+                page_context.setdefault(
+                    page_num,
+                    {
+                        "section": tracker.section,
+                        "section_depth": tracker.section_depth,
+                        "breadcrumb": tracker.breadcrumb,
+                    },
+                )
 
             if isinstance(element, Title):
                 meta = getattr(element, "metadata", None)
@@ -197,7 +198,7 @@ class DocumentParser:
                 chunks.append(chunk)
                 tracker.push(int(depth), element.text or "")
 
-            elif isinstance(element, (Text,)):
+            elif isinstance(element, Text):
                 chunk = self._element_to_chunk(element, file_path, source_name, "text")
                 self._attach_section_context(chunk, tracker)
                 chunks.append(chunk)
@@ -227,8 +228,7 @@ class DocumentParser:
 
         return chunks
 
-
-    def _parse_md(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
+    def _parse_md(self, file_path: Path, source_name: str) -> list[ParsedChunk]:
         """
         Parse Markdown using unstructured's partition_md with heading-tracker.
         Output shape matches _parse_pdf exactly.
@@ -236,16 +236,14 @@ class DocumentParser:
         text = _read_with_encoding_fallback(
             file_path, self._cfg.knowledge_base.get("encoding", "utf-8")
         )
-        elements: List[Element] = partition_md(text=text)
+        elements: list[Element] = partition_md(text=text)
 
         tracker = _HeadingTracker()
-        chunks: List[ParsedChunk] = []
+        chunks: list[ParsedChunk] = []
 
         for element in elements:
             if isinstance(element, Title):
-                depth = getattr(
-                    getattr(element, "metadata", None), "category_depth", 1
-                ) or 1
+                depth = getattr(getattr(element, "metadata", None), "category_depth", 1) or 1
                 chunk = self._element_to_chunk(element, file_path, source_name, "text")
                 if isinstance(element, Table):
                     chunk.modality = "table"
@@ -262,7 +260,7 @@ class DocumentParser:
 
         return chunks
 
-    def _parse_txt(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
+    def _parse_txt(self, file_path: Path, source_name: str) -> list[ParsedChunk]:
         """
         Parse .txt as double-newline-separated paragraphs.
         No headings available — all chunks share section="" and depth=0.
@@ -272,7 +270,7 @@ class DocumentParser:
         )
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
 
-        chunks: List[ParsedChunk] = []
+        chunks: list[ParsedChunk] = []
         for i, para in enumerate(paragraphs):
             chunk = ParsedChunk(
                 text=para,
@@ -295,14 +293,12 @@ class DocumentParser:
 
         return chunks
 
-    def _extract_tables_camelot(
-        self, file_path: Path, source_name: str
-    ) -> List[ParsedChunk]:
+    def _extract_tables_camelot(self, file_path: Path, source_name: str) -> list[ParsedChunk]:
         """
         Extract tables from a PDF using Camelot.
         Returns raw table chunks without section metadata.
         """
-        chunks: List[ParsedChunk] = []
+        chunks: list[ParsedChunk] = []
         output_fmt = self._ingest_cfg["tables"]["output_format"]
 
         try:
@@ -315,8 +311,7 @@ class DocumentParser:
             df = table.df
             raw_header = df.iloc[0]
             col_metadata = [
-                col.split("\n")[0] if "\n" in str(col) else str(col)
-                for col in raw_header
+                col.split("\n")[0] if "\n" in str(col) else str(col) for col in raw_header
             ]
 
             if output_fmt == "json":
@@ -352,13 +347,11 @@ class DocumentParser:
 
     def _caption_image(
         self, element: Image, file_path: Path, source_name: str
-    ) -> Optional[ParsedChunk]:
+    ) -> ParsedChunk | None:
         """
         Generate a caption for an image using GPT-4V when image data is available.
         """
-        image_path: Optional[str] = getattr(
-            getattr(element, "metadata", None), "image_path", None
-        )
+        image_path: str | None = getattr(getattr(element, "metadata", None), "image_path", None)
         if not image_path:
             logger.debug("Image element has no image_path — skipping captioning")
             return None
@@ -383,18 +376,21 @@ class DocumentParser:
         try:
             response = self._openai.chat.completions.create(
                 model=model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url",
-                         "image_url": {"url": data_url, "detail": "high"}},
-                        {"type": "text",
-                         "text": (
-                             "Describe this figure or chart in detail, including all "
-                             "axis labels, data series, trends, and key values visible."
-                         )},
-                    ],
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}},
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Describe this figure or chart in detail, including all "
+                                    "axis labels, data series, trends, and key values visible."
+                                ),
+                            },
+                        ],
+                    }
+                ],
                 max_tokens=max_tok,
             )
         except Exception as exc:
@@ -411,10 +407,8 @@ class DocumentParser:
             metadata={
                 "category": "Image",
                 "element_id": getattr(element, "id", None),
-                "page_number": getattr(
-                    getattr(element, "metadata", None), "page_number", None
-                ),
-                "section": "",       # section/breadcrumb filled by caller
+                "page_number": getattr(getattr(element, "metadata", None), "page_number", None),
+                "section": "",  # section/breadcrumb filled by caller
                 "section_depth": 0,
                 "breadcrumb": "",
                 "has_clip_embedding": False,
@@ -423,9 +417,7 @@ class DocumentParser:
         chunk.chunk_id = chunk.compute_fingerprint()
         return chunk
 
-    def _parse_standalone_image(
-        self, file_path: Path, source_name: str
-    ) -> List[ParsedChunk]:
+    def _parse_standalone_image(self, file_path: Path, source_name: str) -> list[ParsedChunk]:
         with open(file_path, "rb") as fh:
             image_bytes = fh.read()
 
@@ -439,14 +431,15 @@ class DocumentParser:
         try:
             response = self._openai.chat.completions.create(
                 model=model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url",
-                         "image_url": {"url": data_url, "detail": "high"}},
-                        {"type": "text", "text": "Describe this image in full detail."},
-                    ],
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}},
+                            {"type": "text", "text": "Describe this image in full detail."},
+                        ],
+                    }
+                ],
                 max_tokens=max_tok,
             )
         except Exception as exc:
@@ -471,28 +464,28 @@ class DocumentParser:
         chunk.chunk_id = chunk.compute_fingerprint()
         return [chunk]
 
-    def _parse_docx(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
-        elements: List[Element] = partition(filename=str(file_path), strategy="fast")
+    def _parse_docx(self, file_path: Path, source_name: str) -> list[ParsedChunk]:
+        elements: list[Element] = partition(filename=str(file_path), strategy="fast")
         return self._walk_elements_with_tracker(elements, file_path, source_name)
 
-    def _parse_html(self, file_path: Path, source_name: str) -> List[ParsedChunk]:
-        elements: List[Element] = partition(filename=str(file_path), strategy="fast")
+    def _parse_html(self, file_path: Path, source_name: str) -> list[ParsedChunk]:
+        elements: list[Element] = partition(filename=str(file_path), strategy="fast")
         return self._walk_elements_with_tracker(elements, file_path, source_name)
 
     def _walk_elements_with_tracker(
         self,
-        elements: List[Element],
+        elements: list[Element],
         file_path: Path,
         source_name: str,
-    ) -> List[ParsedChunk]:
+    ) -> list[ParsedChunk]:
         """
         Apply heading-tracker logic to DOCX/HTML elements to assign section context.
         """
         tracker = _HeadingTracker()
-        chunks: List[ParsedChunk] = []
+        chunks: list[ParsedChunk] = []
 
         for element in elements:
-            if not isinstance(element, (Text, Title, Table)):
+            if not isinstance(element, Text | Title | Table):
                 continue
             if isinstance(element, Title):
                 meta = getattr(element, "metadata", None)
@@ -555,13 +548,14 @@ class DocumentParser:
         chunk.metadata["breadcrumb"] = tracker.breadcrumb
 
     @staticmethod
-    def _detect_language(text: str) -> Optional[str]:
+    def _detect_language(text: str) -> str | None:
         if len(text.strip()) < 20:
             return None
         try:
             return detect_language(text)
         except Exception:
             return None
+
 
 def _read_with_encoding_fallback(file_path: Path, preferred: str) -> str:
     """
@@ -573,6 +567,3 @@ def _read_with_encoding_fallback(file_path: Path, preferred: str) -> str:
         except (UnicodeDecodeError, LookupError):
             continue
     return file_path.read_bytes().decode("utf-8", errors="replace")
-
-
-

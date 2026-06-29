@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Optional
 
 
 def hash_file(file_path: Path) -> str:
@@ -15,7 +14,7 @@ def hash_file(file_path: Path) -> str:
     return sha.hexdigest()
 
 
-def extract_version(file_path: Path) -> Optional[str]:
+def extract_version(file_path: Path) -> str | None:
     """Extract a version string (e.g. v1.2 or 2024-01-01) from the file name."""
     name = file_path.stem
     version_match = re.search(r"v(\d+(?:\.\d+)+)", name, re.IGNORECASE)

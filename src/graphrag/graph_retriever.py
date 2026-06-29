@@ -1,14 +1,11 @@
-
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from src.config.settings import get_config, get_secrets
+from src.config.settings import get_config
 from src.graphrag.neo4j_store import Neo4jGraphStore
-from src.graphrag.schema import EntityType
 from src.indexing.vector_store import DenseVectorStore, HybridSearchEngine
 from src.ingestion.parser import ParsedChunk
 from src.query.understanding import ProcessedQuery
@@ -17,15 +14,11 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# RRF smoothing constant — same as the rest of the codebase.
 _RRF_K = 60
 
-class GraphRetriever:
-    """
-    Orchestrates graph-aware retrieval on top of the existing vector pipeline.
 
-    Parameters are read from ``config.yaml`` under ``graphrag.retrieval``.
-    """
+class GraphRetriever:
+    """Graph-aware retrieval layer on top of the vector pipeline."""
 
     def __init__(
         self,
@@ -46,34 +39,18 @@ class GraphRetriever:
         self._local_hop_depth: int = self._ret_cfg.get("local_hop_depth", 2)
         self._max_entity_sources: int = self._ret_cfg.get("max_entity_source_chunks", 10)
         self._rrf_k: int = self._ret_cfg.get("rrf_k", _RRF_K)
-        self._graph_available: bool = True  # set False on first connection failure
+        self._graph_available: bool = True
 
     def retrieve(
         self,
         pq: ProcessedQuery,
         query_vector: np.ndarray,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         mode: str = "hybrid",
-    ) -> List[ContextItem]:
-        """
-        Main graph-aware retrieval entry point.
-
-        Args:
-            pq:           Processed query from the query understanding stage.
-            query_vector: Dense embedding of the final query.
-            namespace:    Multi-tenant namespace (mirrors vector retriever).
-            mode:         ``"local"`` | ``"global"`` | ``"hybrid"`` (default).
-                          ``"local"``  — entity neighbourhood only.
-                          ``"global"`` — community summaries only.
-                          ``"hybrid"`` — local + global + vector, fused with RRF.
-
-        Returns:
-            List[ContextItem] ready for the generation stage.
-        """
+    ) -> list[ContextItem]:
+        """Run graph retrieval. mode: 'local' | 'global' | 'hybrid'."""
         if not self._graph_available:
-            logger.warning(
-                "Graph store unavailable — falling back to vector-only retrieval"
-            )
+            logger.warning("Graph store unavailable — falling back to vector-only retrieval")
             return self._vector_fallback(pq, query_vector, namespace)
 
         try:
@@ -88,7 +65,9 @@ class GraphRetriever:
             logger.error(
                 "GraphRetriever.retrieve failed (mode=%s): %s — "
                 "falling back to vector retrieval",
-                mode, exc, exc_info=True,
+                mode,
+                exc,
+                exc_info=True,
             )
             self._graph_available = False
             return self._vector_fallback(pq, query_vector, namespace)
@@ -97,19 +76,10 @@ class GraphRetriever:
         self,
         pq: ProcessedQuery,
         query_vector: np.ndarray,
-        namespace: Optional[str],
-    ) -> List[ContextItem]:
-        """
-        Entity-centric local graph retrieval.
-
-        Steps:
-        1. Extract entity names from the processed query (spaCy entities + sub-questions).
-        2. Look up those entities in Neo4j by name (exact + fuzzy).
-        3. Traverse k-hop neighbourhood.
-        4. Collect source chunk_ids from entity and relationship provenance.
-        5. Fetch those chunks from the vector store.
-        6. Wrap as ContextItems.
-        """
+        namespace: str | None,
+    ) -> list[ContextItem]:
+        """Entity neighbourhood retrieval — looks up query entities in Neo4j and
+        traverses their k-hop neighbourhood to find related chunks."""
         query_entities = self._extract_query_entities(pq)
         if not query_entities:
             logger.debug("No query entities extracted — local graph retrieval skipped")
@@ -120,8 +90,7 @@ class GraphRetriever:
             logger.debug("No entity nodes matched in graph")
             return []
 
-        # Graph traversal: collect neighbours and their chunk provenance
-        neighbour_chunks: List[str] = []
+        neighbour_chunks: list[str] = []
         for node_id in node_ids:
             try:
                 neighbours = self._graph.get_entity_neighbors(
@@ -130,9 +99,7 @@ class GraphRetriever:
                     limit=30,
                 )
                 for nb in neighbours:
-                    nb_chunks = self._graph.get_chunks_for_entity(
-                        nb["entity"]["node_id"]
-                    )
+                    nb_chunks = self._graph.get_chunks_for_entity(nb["entity"]["node_id"])
                     neighbour_chunks.extend(nb_chunks)
             except Exception as exc:
                 logger.warning("Neighbour traversal failed for %s: %s", node_id, exc)
@@ -146,7 +113,9 @@ class GraphRetriever:
         context_items = self._fetch_chunks_as_context(all_chunk_ids, query_vector)
         logger.info(
             "Local graph retrieval: %d entities → %d source chunks → %d context items",
-            len(node_ids), len(all_chunk_ids), len(context_items),
+            len(node_ids),
+            len(all_chunk_ids),
+            len(context_items),
         )
         return context_items
 
@@ -154,15 +123,9 @@ class GraphRetriever:
         self,
         pq: ProcessedQuery,
         query_vector: np.ndarray,
-        namespace: Optional[str],
-    ) -> List[ContextItem]:
-        """
-        Community-level global retrieval.
-
-        Embeds the query, runs ANN search over community summary embeddings,
-        and returns community summaries as pseudo-chunks so the generator
-        can synthesise a high-level answer.
-        """
+        namespace: str | None,
+    ) -> list[ContextItem]:
+        """ANN search over community summary embeddings, returned as pseudo-chunks."""
         try:
             hits = self._graph.vector_search_entities(
                 query_embedding=query_vector.tolist(),
@@ -172,7 +135,7 @@ class GraphRetriever:
             logger.warning("Community vector search failed: %s", exc)
             return []
 
-        context_items: List[ContextItem] = []
+        context_items: list[ContextItem] = []
         for rank, hit in enumerate(hits, start=1):
             entity = hit.get("entity", {})
             community_id = entity.get("community_id")
@@ -206,15 +169,9 @@ class GraphRetriever:
         self,
         pq: ProcessedQuery,
         query_vector: np.ndarray,
-        namespace: Optional[str],
-    ) -> List[ContextItem]:
-        """
-        Full hybrid retrieval:
-        - Local graph context (entity neighbourhood)
-        - Global community context (thematic summaries)
-        - Vector retrieval (existing Retriever)
-        All three are merged via Reciprocal Rank Fusion.
-        """
+        namespace: str | None,
+    ) -> list[ContextItem]:
+        """Local + global + vector results fused with RRF."""
         local_items = self._local_retrieve(pq, query_vector, namespace)
         global_items = self._global_retrieve(pq, query_vector, namespace)
         vector_items = self._vector_fallback(pq, query_vector, namespace)
@@ -222,22 +179,19 @@ class GraphRetriever:
         merged = self._rrf_merge([local_items, global_items, vector_items])
         logger.info(
             "Hybrid graph+vector retrieval: local=%d, global=%d, vector=%d → merged=%d",
-            len(local_items), len(global_items), len(vector_items), len(merged),
+            len(local_items),
+            len(global_items),
+            len(vector_items),
+            len(merged),
         )
         return merged
 
-    def _rrf_merge(self, lists: List[List[ContextItem]]) -> List[ContextItem]:
-        """
-        Merge multiple ContextItem lists with Reciprocal Rank Fusion.
-
-        Items are keyed by (chunk_id or first-50-chars).  Score from each list
-        is 1 / (rrf_k + rank).  The merged list is sorted descending by total
-        RRF score and capped at the configured top_k_final.
-        """
+    def _rrf_merge(self, lists: list[list[ContextItem]]) -> list[ContextItem]:
+        """Merge ranked lists via Reciprocal Rank Fusion."""
         cfg = get_config()
         top_k_final: int = cfg.retrieval.get("top_k_final", 5)
-        scores: Dict[str, float] = {}
-        item_map: Dict[str, ContextItem] = {}
+        scores: dict[str, float] = {}
+        item_map: dict[str, ContextItem] = {}
 
         for result_list in lists:
             for rank, item in enumerate(result_list, start=1):
@@ -255,30 +209,20 @@ class GraphRetriever:
 
         return merged
 
-    def _extract_query_entities(self, pq: ProcessedQuery) -> List[str]:
-        """
-        Extract potential entity names from the processed query.
+    def _extract_query_entities(self, pq: ProcessedQuery) -> list[str]:
+        """Pull entity names from NER results and capitalised tokens in the query."""
+        entities: list[str] = []
 
-        Sources (in priority order):
-        1. Named entities from spaCy NER (stored in pq.metadata_filters["entities"])
-        2. Capitalised phrases in the standalone query (simple heuristic)
-        3. Sub-question text (extra entities may appear there)
-        """
-        entities: List[str] = []
-
-        # 1. NER results from QueryUnderstanding
         ner_entities = pq.metadata_filters.get("entities", [])
         if isinstance(ner_entities, list):
             entities.extend(str(e) for e in ner_entities)
 
-        # 2. Capitalised token heuristic (noun phrases)
         for text in [pq.standalone_query] + list(pq.sub_questions):
             tokens = re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", text)
             entities.extend(tokens)
 
-        # Deduplicate preserving order
         seen = set()
-        unique: List[str] = []
+        unique: list[str] = []
         for e in entities:
             if e.lower() not in seen:
                 seen.add(e.lower())
@@ -286,18 +230,10 @@ class GraphRetriever:
 
         return unique
 
-    def _resolve_entities(
-        self, entity_names: List[str]
-    ) -> Tuple[List[str], List[str]]:
-        """
-        Look up entity names in Neo4j.
-
-        Returns:
-            node_ids    — list of matched entity node_ids
-            chunk_ids   — deduplicated chunk_ids from matched entities
-        """
-        node_ids: List[str] = []
-        chunk_ids: List[str] = []
+    def _resolve_entities(self, entity_names: list[str]) -> tuple[list[str], list[str]]:
+        """Look up entity names in Neo4j, return (node_ids, chunk_ids)."""
+        node_ids: list[str] = []
+        chunk_ids: list[str] = []
 
         for name in entity_names:
             try:
@@ -314,31 +250,22 @@ class GraphRetriever:
         return node_ids, chunk_ids
 
     def _fetch_chunks_as_context(
-        self, chunk_ids: List[str], query_vector: np.ndarray
-    ) -> List[ContextItem]:
-        """
-        Fetch ParsedChunks from the vector store by chunk_id and wrap them
-        as ContextItems with a graph-provenance score.
-        """
-        context_items: List[ContextItem] = []
+        self, chunk_ids: list[str], query_vector: np.ndarray
+    ) -> list[ContextItem]:
+        context_items: list[ContextItem] = []
         for rank, chunk_id in enumerate(chunk_ids, start=1):
             chunk = self._vector_retriever._fetch_chunk_by_id(chunk_id)
             if chunk:
-                # Score = rank-based decay (1/rank) — we don't have a dot-product
-                # score here since this is provenance-driven, not similarity-driven.
-                score = 1.0 / rank
-                context_items.append(
-                    ContextItem(chunk=chunk, score=score, rank=rank)
-                )
+                context_items.append(ContextItem(chunk=chunk, score=1.0 / rank, rank=rank))
         return context_items
 
     def _vector_fallback(
         self,
         pq: ProcessedQuery,
         query_vector: np.ndarray,
-        namespace: Optional[str],
-    ) -> List[ContextItem]:
-        """Delegate to the existing vector Retriever as a fallback."""
+        namespace: str | None,
+    ) -> list[ContextItem]:
+        """Fall back to standard vector retrieval."""
         try:
             return self._vector_retriever.retrieve(
                 pq=pq, query_vector=query_vector, namespace=namespace

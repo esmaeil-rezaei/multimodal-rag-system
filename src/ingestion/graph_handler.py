@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import List, Tuple
 
 from src.indexing.embedder import QueryEmbedder
 from src.ingestion.parser import ParsedChunk
@@ -17,16 +16,14 @@ class GraphIngestionHandler:
         self._extractor = graph_extractor
         self._store = graph_store
 
-    def process(self, chunks: List[ParsedChunk], file_name: str) -> None:
+    def process(self, chunks: list[ParsedChunk], file_name: str) -> None:
         """Extract entities and relationships from text chunks and persist to Neo4j."""
         try:
             text_chunks = [c for c in chunks if c.modality == "text" and c.text]
             if not text_chunks:
                 return
 
-            extraction_results = asyncio.run(
-                self._extractor.batch_extract(text_chunks)
-            )
+            extraction_results = asyncio.run(self._extractor.batch_extract(text_chunks))
 
             entities_written = 0
             relationships_written = 0
@@ -47,7 +44,9 @@ class GraphIngestionHandler:
         except Exception as exc:
             logger.error(
                 "GraphRAG extraction failed for %s (non-fatal): %s",
-                file_name, exc, exc_info=True,
+                file_name,
+                exc,
+                exc_info=True,
             )
 
     def _embed_new_entities(self) -> None:
@@ -74,15 +73,16 @@ class GraphIngestionHandler:
             ]
 
             emb = QueryEmbedder()
-            pairs: List[Tuple[str, list]] = []
-            for row, text in zip(rows, texts):
+            pairs: list[tuple[str, list]] = []
+            for row, text in zip(rows, texts, strict=False):
                 try:
                     vec = emb.embed_query(text)
                     pairs.append((row["node_id"], vec.tolist()))
                 except Exception as exc:
                     logger.debug(
                         "Embedding failed for entity %s: %s",
-                        row["node_id"][:12], exc,
+                        row["node_id"][:12],
+                        exc,
                     )
 
             if pairs:

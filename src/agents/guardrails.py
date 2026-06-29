@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from agents import (
@@ -9,16 +7,16 @@ from agents import (
     input_guardrail,
     output_guardrail,
 )
-
-from src.operations.ops_middleware import PIIGuard
 from src.agents.context import RAGRunContext
 from src.agents.schemas import GenerationOutput
 from src.config.settings import get_config
+from src.operations.ops_middleware import PIIGuard
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 _cfg = get_config()
 _pii_guard = PIIGuard()
+
 
 @input_guardrail
 async def pii_input_guardrail(
@@ -79,6 +77,7 @@ async def pii_input_guardrail(
             tripwire_triggered=True,
         )
 
+
 @output_guardrail
 async def output_faithfulness_guardrail(
     ctx: RunContextWrapper[RAGRunContext],
@@ -86,9 +85,7 @@ async def output_faithfulness_guardrail(
     output: GenerationOutput,
 ) -> GuardrailFunctionOutput:
 
-    min_score: float = _cfg.query.get("guardrails", {}).get(
-        "min_faithfulness_score", 0.40
-    )
+    min_score: float = _cfg.query.get("guardrails", {}).get("min_faithfulness_score", 0.40)
 
     score = output.faithfulness_score
     if score is not None and score < min_score:
@@ -101,15 +98,14 @@ async def output_faithfulness_guardrail(
             },
         )
         return GuardrailFunctionOutput(
-            output_info=(
-                f"Faithfulness score {score:.2f} below minimum {min_score:.2f}."
-            ),
+            output_info=(f"Faithfulness score {score:.2f} below minimum {min_score:.2f}."),
             tripwire_triggered=True,
         )
 
     return GuardrailFunctionOutput(
         output_info=f"faithfulness_ok: {score}", tripwire_triggered=False
     )
+
 
 @output_guardrail
 async def output_length_guardrail(
@@ -143,6 +139,4 @@ async def output_length_guardrail(
             tripwire_triggered=True,
         )
 
-    return GuardrailFunctionOutput(
-        output_info=f"length_ok: {length}", tripwire_triggered=False
-    )
+    return GuardrailFunctionOutput(output_info=f"length_ok: {length}", tripwire_triggered=False)

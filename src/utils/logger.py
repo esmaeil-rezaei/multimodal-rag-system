@@ -1,13 +1,12 @@
-
-import logging
-import uuid
 import json
-import sys
+import logging
 import logging.handlers
-from pathlib import Path
-from datetime import datetime, timezone
+import sys
+import uuid
 from contextvars import ContextVar
-from typing import Optional
+from datetime import datetime, timezone
+from pathlib import Path
+
 from src.config.settings import get_config, get_secrets
 
 _LOG_DIR: Path = Path("logs")
@@ -22,11 +21,10 @@ _RUN_START_TIME: str = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
 _RUN_LOG_FILE: Path = _RUNS_DIR / f"{_RUN_START_TIME}.log"
 
 # Correlation ID for tracing logs across runs
-_correlation_id: ContextVar[str] = ContextVar(
-    "_correlation_id", default="no-request-context"
-)
+_correlation_id: ContextVar[str] = ContextVar("_correlation_id", default="no-request-context")
 
-def set_correlation_id(cid: Optional[str] = None):
+
+def set_correlation_id(cid: str | None = None):
     """
     Set a unique correlation ID for the current execution context.
     """
@@ -34,34 +32,38 @@ def set_correlation_id(cid: Optional[str] = None):
     _correlation_id.set(cid)
     return cid
 
+
 def get_correlation_id() -> str:
     """Get the current correlation ID."""
     return _correlation_id.get()
+
 
 def _tty(code: str) -> str:
     """Return the ANSI code only when stdout is a real terminal."""
     return code if sys.stdout.isatty() else ""
 
-RESET  = _tty("\033[0m")
-BOLD   = _tty("\033[1m")
-DIM    = _tty("\033[2m")
-GREEN  = _tty("\033[32m")
-AMBER  = _tty("\033[33m")
-RED    = _tty("\033[31m")
-CYAN   = _tty("\033[36m")
+
+RESET = _tty("\033[0m")
+BOLD = _tty("\033[1m")
+DIM = _tty("\033[2m")
+GREEN = _tty("\033[32m")
+AMBER = _tty("\033[33m")
+RED = _tty("\033[31m")
+CYAN = _tty("\033[36m")
 
 # private aliases used by the formatters below
 _RESET = RESET
-_BOLD  = BOLD
-_DIM   = DIM
+_BOLD = BOLD
+_DIM = DIM
 
 _LEVEL_COLOURS = {
-    "DEBUG":    _tty("\033[36m"),
-    "INFO":     GREEN,
-    "WARNING":  AMBER,
-    "ERROR":    RED,
+    "DEBUG": _tty("\033[36m"),
+    "INFO": GREEN,
+    "WARNING": AMBER,
+    "ERROR": RED,
     "CRITICAL": _tty("\033[35m"),
 }
+
 
 class ColouredTerminalFormatter(logging.Formatter):
     """
@@ -76,16 +78,17 @@ class ColouredTerminalFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        colour  = _LEVEL_COLOURS.get(record.levelname, "")
-        ts      = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")    # Timestamp
-        level   = f"{colour}{_BOLD}{record.levelname:<9}{_RESET}"             # Padded, coloured level
-        name    = f"{_DIM}{record.name}{_RESET}"                              # Dimmed logger name
-        message = record.getMessage()                                         # Log message
+        colour = _LEVEL_COLOURS.get(record.levelname, "")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")  # Timestamp
+        level = f"{colour}{_BOLD}{record.levelname:<9}{_RESET}"  # Padded, coloured level
+        name = f"{_DIM}{record.name}{_RESET}"  # Dimmed logger name
+        message = record.getMessage()  # Log message
 
         if record.exc_info:
             message += "\n" + self.formatException(record.exc_info)
 
         return f"{ts}  {level}  {name}  {message}"
+
 
 class PlainFileFormatter(logging.Formatter):
     """
@@ -99,11 +102,11 @@ class PlainFileFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        ts      = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        level   = f"{record.levelname:<8}"                  # Left-padded to 8 chars for alignment
-        name    = record.name                               # Logger name e.g. src.ingestion.pipeline
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        level = f"{record.levelname:<8}"  # Left-padded to 8 chars for alignment
+        name = record.name  # Logger name e.g. src.ingestion.pipeline
         message = record.getMessage()
-        corr    = get_correlation_id()[:8]
+        corr = get_correlation_id()[:8]
 
         line = f"[{ts}] [{level}] [{name}] {message}  |corr={corr}"
 
@@ -111,6 +114,7 @@ class PlainFileFormatter(logging.Formatter):
             line += "\n" + self.formatException(record.exc_info)
 
         return line
+
 
 class JsonFormatter(logging.Formatter):
     """
@@ -121,13 +125,13 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         obj = {
-            "timestamp":      datetime.now(timezone.utc).isoformat(),
-            "level":          record.levelname,
-            "logger":         record.name,
-            "message":        record.getMessage(),
-            "module":         record.module,
-            "function":       record.funcName,
-            "line":           record.lineno,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
             "correlation_id": get_correlation_id(),
         }
         if hasattr(record, "extra"):
@@ -135,6 +139,7 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info:
             obj["exception"] = self.formatException(record.exc_info)
         return json.dumps(obj, ensure_ascii=False)
+
 
 def get_logger(name: str) -> logging.Logger:
     """
@@ -152,11 +157,11 @@ def get_logger(name: str) -> logging.Logger:
     Returns:
         Configured Logger instance (cached — safe to call many times).
     """
-    cfg        = get_config()
-    secrets    = get_secrets()
-    log_level  = getattr(logging, secrets.log_level.upper(), logging.INFO)
+    cfg = get_config()
+    secrets = get_secrets()
+    log_level = getattr(logging, secrets.log_level.upper(), logging.INFO)
     structured = cfg.operations["observability"].get("structured_logging", True)
-    is_dev     = secrets.app_env == "development"
+    is_dev = secrets.app_env == "development"
 
     logger = logging.getLogger(name)
     if logger.handlers:
@@ -177,12 +182,12 @@ def get_logger(name: str) -> logging.Logger:
     logger.addHandler(stdout_handler)
 
     daily_handler = logging.handlers.TimedRotatingFileHandler(
-        filename    = str(_DAILY_LOG_FILE),     # logs/app.log
-        when        = "midnight",               # Rotate once per day
-        interval    = 1,                        # Every 1 day
-        backupCount = 30,                       # Keep 30 days of rotated files
-        encoding    = "utf-8",
-        utc         = True,                     # UTC-based rotation timing
+        filename=str(_DAILY_LOG_FILE),  # logs/app.log
+        when="midnight",  # Rotate once per day
+        interval=1,  # Every 1 day
+        backupCount=30,  # Keep 30 days of rotated files
+        encoding="utf-8",
+        utc=True,  # UTC-based rotation timing
     )
     daily_handler.setLevel(log_level)
     daily_handler.setFormatter(PlainFileFormatter())
@@ -191,9 +196,9 @@ def get_logger(name: str) -> logging.Logger:
     logger.addHandler(daily_handler)
 
     run_handler = logging.FileHandler(
-        filename = str(_RUN_LOG_FILE),          # logs/runs/2026-03-22_14-05-31.log
-        mode     = "a",
-        encoding = "utf-8",
+        filename=str(_RUN_LOG_FILE),  # logs/runs/2026-03-22_14-05-31.log
+        mode="a",
+        encoding="utf-8",
     )
     run_handler.setLevel(log_level)
     run_handler.setFormatter(PlainFileFormatter())
