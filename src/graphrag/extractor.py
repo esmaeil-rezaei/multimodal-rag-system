@@ -1,11 +1,10 @@
-
 from __future__ import annotations
 
 import asyncio
 import json
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import openai
 
@@ -71,12 +70,14 @@ _HONORIFIC_RE = re.compile(
     re.IGNORECASE,
 )
 
+
 def _normalise_name(name: str) -> str:
     """
     Strip honorifics and leading/trailing whitespace.
     Keeps casing (proper nouns should stay proper-cased).
     """
     return _HONORIFIC_RE.sub("", name).strip()
+
 
 def _safe_entity_type(raw: str) -> EntityType:
     """Map raw LLM label to EntityType, falling back to UNKNOWN."""
@@ -86,6 +87,7 @@ def _safe_entity_type(raw: str) -> EntityType:
         logger.debug("Unknown entity type '%s' → UNKNOWN", raw)
         return EntityType.UNKNOWN
 
+
 def _safe_relation_type(raw: str) -> RelationshipType:
     """Map raw LLM label to RelationshipType, falling back to RELATED_TO."""
     try:
@@ -94,37 +96,34 @@ def _safe_relation_type(raw: str) -> RelationshipType:
         logger.debug("Unknown relation type '%s' → RELATED_TO", raw)
         return RelationshipType.RELATED_TO
 
-class GraphExtractor:
-    """
-    Extracts entities and relationships from text chunks using an LLM.
 
-    Parameters are read from ``config.yaml`` under the ``graphrag`` key
-    (added in the updated config).  Async batch processing via
-    ``batch_extract()`` respects a concurrency cap to avoid rate-limit issues.
-    """
+class GraphExtractor:
+    """Extracts entities and relationships from text chunks via an async LLM pipeline."""
 
     def __init__(self) -> None:
         cfg = get_config()
         sec = get_secrets()
-        self._gr_cfg: Dict[str, Any] = cfg.get("graphrag", {})
+        self._gr_cfg: dict[str, Any] = cfg.get("graphrag", {})
         self._model: str = self._gr_cfg.get("extraction_model", "gpt-4o")
         self._max_chunk_chars: int = self._gr_cfg.get("max_chunk_chars", 4000)
         self._temperature: float = self._gr_cfg.get("extraction_temperature", 0.0)
         self._max_tokens: int = self._gr_cfg.get("extraction_max_tokens", 2048)
         self._concurrency: int = self._gr_cfg.get("extraction_concurrency", 8)
         self._openai = openai.AsyncOpenAI(api_key=sec.openai_api_key)
-        # Semaphore created per-run in batch_extract() to avoid event loop mismatch
-        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._semaphore: asyncio.Semaphore | None = None
 
-        # Pre-compute the allowed-type strings for the prompt once.
-        # Uses the registry (not the enum) so infrastructure labels like
-        # CHUNK/DOCUMENT/COMMUNITY/UNKNOWN are excluded from the LLM prompt.
         self._entity_types_str = ", ".join(entity_type_registry.all_labels())
-        self._relation_types_str = ", ".join(r.value for r in RelationshipType
-                                             if r not in (RelationshipType.MENTIONS,
-                                                          RelationshipType.PART_OF,
-                                                          RelationshipType.BELONGS_TO_COMMUNITY,
-                                                          RelationshipType.CO_OCCURS_WITH))
+        self._relation_types_str = ", ".join(
+            r.value
+            for r in RelationshipType
+            if r
+            not in (
+                RelationshipType.MENTIONS,
+                RelationshipType.PART_OF,
+                RelationshipType.BELONGS_TO_COMMUNITY,
+                RelationshipType.CO_OCCURS_WITH,
+            )
+        )
 
     def extract(self, chunk: ParsedChunk) -> ExtractionResult:
         """
@@ -140,23 +139,15 @@ class GraphExtractor:
 
     async def batch_extract(
         self,
-        chunks: List[ParsedChunk],
-    ) -> List[ExtractionResult]:
-        """
-        Extract entities and relationships from all chunks concurrently,
-        bounded by ``self._concurrency`` to respect API rate limits.
-
-        Returns one ExtractionResult per input chunk (order preserved).
-        Failed chunks produce an ExtractionResult with empty entities/relationships
-        rather than propagating exceptions, so the pipeline is fault-tolerant.
-        """
-        # Create a fresh semaphore bound to the current event loop
+        chunks: list[ParsedChunk],
+    ) -> list[ExtractionResult]:
+        """Extract entities and relationships from all chunks concurrently, returning one result per chunk."""
         semaphore = asyncio.Semaphore(self._concurrency)
         tasks = [self._extract_async(chunk, semaphore) for chunk in chunks]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        processed: List[ExtractionResult] = []
-        for chunk, result in zip(chunks, results):
+        processed: list[ExtractionResult] = []
+        for chunk, result in zip(chunks, results, strict=False):
             if isinstance(result, Exception):
                 logger.error(
                     "Extraction failed for chunk %s: %s",
@@ -164,15 +155,15 @@ class GraphExtractor:
                     result,
                     exc_info=result,
                 )
-                processed.append(
-                    ExtractionResult(chunk_id=chunk.chunk_id or "")
-                )
+                processed.append(ExtractionResult(chunk_id=chunk.chunk_id or ""))
             else:
                 processed.append(result)
 
         return processed
 
-    async def _extract_async(self, chunk: ParsedChunk, semaphore: asyncio.Semaphore) -> ExtractionResult:
+    async def _extract_async(
+        self, chunk: ParsedChunk, semaphore: asyncio.Semaphore
+    ) -> ExtractionResult:
         """Core async extraction for one chunk."""
         async with semaphore:
             chunk_id = chunk.chunk_id or ""
@@ -198,8 +189,7 @@ class GraphExtractor:
             )
 
             logger.debug(
-                "Extracted %d entities, %d relationships from chunk %s "
-                "(%.0f ms, %d+%d tokens)",
+                "Extracted %d entities, %d relationships from chunk %s " "(%.0f ms, %d+%d tokens)",
                 len(entities),
                 len(relationships),
                 chunk_id[:12],
@@ -218,14 +208,9 @@ class GraphExtractor:
                 extraction_latency_ms=latency_ms,
             )
 
-    async def _call_llm(
-        self, system: str, user: str, chunk_id: str
-    ) -> Tuple[str, int, int]:
-        """
-        Call the OpenAI API with exponential-backoff retry (up to 3 attempts).
-        Returns (raw_text, prompt_tokens, completion_tokens).
-        """
-        last_exc: Optional[Exception] = None
+    async def _call_llm(self, system: str, user: str, chunk_id: str) -> tuple[str, int, int]:
+        """Call the OpenAI API with exponential-backoff retry; returns (raw_text, prompt_tokens, completion_tokens)."""
+        last_exc: Exception | None = None
         for attempt in range(1, 4):
             try:
                 response = await self._openai.chat.completions.create(
@@ -245,17 +230,21 @@ class GraphExtractor:
                     usage.completion_tokens if usage else 0,
                 )
             except openai.RateLimitError as exc:
-                wait = 2 ** attempt
+                wait = 2**attempt
                 logger.warning(
                     "RateLimitError on chunk %s attempt %d — retrying in %ds",
-                    chunk_id[:12], attempt, wait,
+                    chunk_id[:12],
+                    attempt,
+                    wait,
                 )
                 await asyncio.sleep(wait)
                 last_exc = exc
             except Exception as exc:
                 logger.warning(
                     "LLM extraction error on chunk %s attempt %d: %s",
-                    chunk_id[:12], attempt, exc,
+                    chunk_id[:12],
+                    attempt,
+                    exc,
                 )
                 last_exc = exc
                 if attempt < 3:
@@ -265,18 +254,13 @@ class GraphExtractor:
             f"LLM extraction failed after 3 attempts for chunk {chunk_id}: {last_exc}"
         )
 
-    def _parse_response(self, raw: str, chunk_id: str) -> Dict[str, Any]:
-        """
-        Parse LLM JSON output.  Two-pass strategy:
-        1. Direct json.loads — works when the LLM returns well-formed JSON.
-        2. Regex rescue — tries to extract the first {...} block if step 1 fails.
-        """
+    def _parse_response(self, raw: str, chunk_id: str) -> dict[str, Any]:
+        """Parse LLM JSON output, falling back to regex extraction on decode failure."""
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
             pass
 
-        # Rescue: find first JSON object in the response
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if match:
             try:
@@ -291,13 +275,10 @@ class GraphExtractor:
         return {"entities": [], "relationships": []}
 
     def _build_entities(
-        self, raw_entities: List[Dict[str, Any]], chunk_id: str
-    ) -> List[EntityNode]:
-        """
-        Convert raw dicts from the LLM into typed EntityNode instances.
-        Invalid entries are skipped with a warning.
-        """
-        nodes: List[EntityNode] = []
+        self, raw_entities: list[dict[str, Any]], chunk_id: str
+    ) -> list[EntityNode]:
+        """Convert raw LLM entity dicts into EntityNode instances, skipping malformed entries."""
+        nodes: list[EntityNode] = []
         seen_ids: set[str] = set()
 
         for raw in raw_entities:
@@ -314,7 +295,6 @@ class GraphExtractor:
                     source_chunks=[chunk_id] if chunk_id else [],
                 )
                 if node.node_id in seen_ids:
-                    # Merge source chunk into existing node
                     existing = next(n for n in nodes if n.node_id == node.node_id)
                     if chunk_id and chunk_id not in existing.source_chunks:
                         existing.source_chunks.append(chunk_id)
@@ -328,30 +308,19 @@ class GraphExtractor:
 
     def _build_relationships(
         self,
-        raw_relationships: List[Dict[str, Any]],
-        entities: List[EntityNode],
+        raw_relationships: list[dict[str, Any]],
+        entities: list[EntityNode],
         chunk_id: str,
-    ) -> List[RelationshipEdge]:
-        """
-        Convert raw relationship dicts into RelationshipEdge instances.
-
-        Both source and target must be present in the extracted entities list.
-        Unknown relation types fall back to RELATED_TO.
-        """
-        name_to_id: Dict[str, str] = {
-            _normalise_name(e.name).lower(): e.node_id for e in entities
-        }
-        edges: List[RelationshipEdge] = []
+    ) -> list[RelationshipEdge]:
+        """Convert raw relationship dicts into RelationshipEdge instances, requiring both endpoints in the extracted entity set."""
+        name_to_id: dict[str, str] = {_normalise_name(e.name).lower(): e.node_id for e in entities}
+        edges: list[RelationshipEdge] = []
         seen_edge_ids: set[str] = set()
 
         for raw in raw_relationships:
             try:
-                source_name = _normalise_name(
-                    str(raw.get("source", ""))
-                ).lower().strip()
-                target_name = _normalise_name(
-                    str(raw.get("target", ""))
-                ).lower().strip()
+                source_name = _normalise_name(str(raw.get("source", ""))).lower().strip()
+                target_name = _normalise_name(str(raw.get("target", ""))).lower().strip()
 
                 source_id = name_to_id.get(source_name)
                 target_id = name_to_id.get(target_name)
@@ -365,9 +334,7 @@ class GraphExtractor:
                     )
                     continue
 
-                relation_type = _safe_relation_type(
-                    str(raw.get("relation_type", "RELATED_TO"))
-                )
+                relation_type = _safe_relation_type(str(raw.get("relation_type", "RELATED_TO")))
                 edge = RelationshipEdge(
                     source_id=source_id,
                     target_id=target_id,

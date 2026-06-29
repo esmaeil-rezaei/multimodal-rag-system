@@ -1,0 +1,116 @@
+[
+  {
+    "conversation_id": "conv_ad_01",
+    "namespace": "Alzheimer's disease",
+    "metadata": {"topic": "CSF biomarker triad", "difficulty": "medium"},
+    "turns": [
+      {
+        "query": "What are the three internationally validated CSF biomarkers used to diagnose Alzheimer's disease?",
+        "expected_answer_keywords": ["Ab(1-42)", "total tau", "phospho-tau-181", "CSF", "ELISA"],
+        "relevant_chunk_ids": [
+          "60ec847cedb185130320583eba0954afcb07028f4aa561793f83c619a11ecaf7",
+          "16a5ff803b4e619355c7d22e4b9d4fc7ef41f5b6da5309f397d8e81939fea601"
+        ],
+        "expects_condensation": false
+      },
+      {
+        "query": "Why are its levels reduced in the CSF of AD patients?",
+        "expected_answer_keywords": ["reduced clearance", "plaque deposition", "aggregation", "Ab(1-42)", "APP"],
+        "relevant_chunk_ids": [
+          "24d6f08941737177a3e040d828c31beee67b306e23c13c5dd73ec318a2bb0140",
+          "1e9c7758055a32cd860da8eb34097daa01ebd93794cda5400f04161ce84cd1a2"
+        ],
+        "expects_condensation": true,
+        "condensation_must_contain": ["Ab(1-42)", "CSF"],
+        "condensation_must_not_contain": ["its"]
+      },
+      {
+        "query": "And what is the diagnostic cut-off for phospho-tau-181?",
+        "expected_answer_keywords": ["60 pg/ml", "phospho-tau-181", "hyperphosphorylated", "cut-off"],
+        "relevant_chunk_ids": [
+          "4f9df82b77e144d6196a2bbe870b6ef01c076b088c43bcebf81977dc403aff92"
+        ],
+        "expects_condensation": true,
+        "condensation_must_contain": ["phospho-tau-181"],
+        "condensation_must_not_contain": ["and"]
+      }
+    ]
+  },
+  {
+    "conversation_id": "conv_ad_02",
+    "namespace": "Alzheimer's disease",
+    "metadata": {"topic": "blood biomarkers and peripheral markers", "difficulty": "hard"},
+    "turns": [
+      {
+        "query": "What are the main limitations of CSF-based biomarkers for Alzheimer's disease diagnosis?",
+        "expected_answer_keywords": ["lumbar puncture", "invasive", "side effects", "follow-up", "blood biomarkers"],
+        "relevant_chunk_ids": [
+          "78949506a52a843b6a37860d3ef384b5a45b4e2623106e26ca73eeb688b1ce29",
+          "df2ace214a2a88dba543700fd4e3965df181d2f90a9384e93e3f6aa84d897457"
+        ],
+        "expects_condensation": false
+      },
+      {
+        "query": "What blood-based markers involving platelets have been studied for AD?",
+        "expected_answer_keywords": ["APP", "130-kDa", "platelets", "sensitivity", "specificity"],
+        "relevant_chunk_ids": [
+          "cba6406d9d13aeac850f23222a566dc0fe96c74a8423519c1095de2611e28f8f",
+          "c959153435f0e2843fabc2a356db56e28641ce07dcdce7f009ea2aa2a86dc85b"
+        ],
+        "expects_condensation": true,
+        "condensation_must_contain": ["blood", "Alzheimer"],
+        "condensation_must_not_contain": ["they", "those"]
+      },
+      {
+        "query": "What about inflammatory proteins in blood?",
+        "expected_answer_keywords": ["cytokines", "18 biomarkers", "microglia", "neuroinflammation", "ELISA"],
+        "relevant_chunk_ids": [
+          "ec261bdb4f3508f9b7e3479e4910075ff54389e780111fc5804be24e591ceda6",
+          "fedbdd415d3eff259fefa2021e94285288f7700e3b2a326c827ff7b43b78c577"
+        ],
+        "expects_condensation": true,
+        "condensation_must_contain": ["inflammatory", "blood", "Alzheimer"],
+        "condensation_must_not_contain": ["what about"]
+      }
+    ]
+  },
+  {
+    "conversation_id": "conv_ad_03",
+    "namespace": "Alzheimer's disease",
+    "metadata": {"topic": "biomarker criteria and multi-biomarker future", "difficulty": "medium"},
+    "turns": [
+      {
+        "query": "What criteria must a biomarker satisfy to be useful for diagnosing Alzheimer's disease?",
+        "expected_answer_keywords": ["sensitivity", "specificity", "pathological processes", "pharmacological", "reproducible"],
+        "relevant_chunk_ids": [
+          "9079b3b60aedc4099efef8bffd87b9a64e542d06631d31ab348f2bae6feab145",
+          "1bb5cf8bf9e5579de10944db2367135c98bf64310a5f589f10fdd19c733be69e",
+          "60c5c57459e118b87d7b5002cfcc929ff8e6cc60a8688a85d88a36d59b56957c"
+        ],
+        "expects_condensation": false
+      },
+      {
+        "query": "How does the paper propose combining multiple markers to overcome those limitations?",
+        "expected_answer_keywords": ["multi-biomarker", "proteomics", "genomics", "high-throughput", "proteins"],
+        "relevant_chunk_ids": [
+          "57ffb670dd7a4286358787fe2d19d1adebd3c2e1a1b5c7cd427ae0ccda3dad4e",
+          "9189d32d8995edbeafcadc9f55168b5709eb2dbc7b4a321a6183385829e32d7e"
+        ],
+        "expects_condensation": true,
+        "condensation_must_contain": ["biomarkers", "Alzheimer"],
+        "condensation_must_not_contain": ["those", "limitations"]
+      },
+      {
+        "query": "And what future steps are required before those combination approaches can enter clinical practice?",
+        "expected_answer_keywords": ["multicenter", "consensus", "peer-reviewed", "independent", "combination", "blood"],
+        "relevant_chunk_ids": [
+          "d2cfd6ed3fe0d7e89708d84f74ca445f7f205ea8eb886ae1498198097176e588",
+          "0d386d5b4a922bc9f8395df3a9f6bbc3953d1c4606bc7632a27c4d4ed1cf6c0b"
+        ],
+        "expects_condensation": true,
+        "condensation_must_contain": ["multi-biomarker", "Alzheimer"],
+        "condensation_must_not_contain": ["those", "and"]
+      }
+    ]
+  }
+]

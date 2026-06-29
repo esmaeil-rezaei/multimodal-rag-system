@@ -130,8 +130,12 @@ query:
 
   conversation:
     enabled: true                               # conversation mode
-    history_window: 6                           # context window size
+    history_window: 6                           # active turns kept verbatim
     condense_model: "gpt-4-turbo"               # query rewrite model
+    compress_history: true                      # summarise turns that fall outside the window
+    compress_threshold: 14                      # summarise when history exceeds this many turns
+    compress_model: "gpt-4o-mini"               # cheap model for summarisation
+    compress_max_tokens: 400                    # token budget for the summary
 
   entity_recognition:
     enabled: true                               # NER toggle
@@ -218,7 +222,7 @@ evaluation:
     generator_model: "gpt-4-turbo"              # generator model
 
   llm_judge:
-    enabled: true                               # LLM evaluation
+    enabled: false                              # LLM evaluation (disabled: judge LLM currently unreachable)
     method: "ragas"                             # ragas" | "custom" | "both"
     model: "gpt-4-turbo"                        # judge model
     criteria: ["faithfulness", "relevance", "coherence", "completeness"]
@@ -233,6 +237,31 @@ evaluation:
     reference_window: 1000                      # baseline window
     drift_threshold: 0.15                       # alert threshold
     alert_channel: "slack"                      # alert destination: slack | email | pagerduty
+
+  # Layer 5 — Cost & Latency SLO tracking (src/evaluation/cost_latency_eval.py)
+  cost_latency_slo:
+    enabled: true                               # enforce SLO checks per query
+    p50_latency_ms: 2000.0                      # median end-to-end latency budget
+    p95_latency_ms: 6000.0                      # p95 end-to-end latency budget
+    p99_latency_ms: 10000.0                     # p99 end-to-end latency budget
+    max_cost_per_query_usd: 0.05                # per-query $ cost ceiling
+    max_tokens_per_query: 6000                  # per-query token ceiling
+    pricing_overrides: {}                       # override DEFAULT_LLM_PRICING_PER_1M / rerank pricing
+
+  # Layer 6 — Multi-turn conversational evaluation (src/evaluation/multiturn_eval.py)
+  multi_turn:
+    enabled: true
+    golden_conversations_path: "tests/golden_conversations.json"
+    keyword_pass_threshold: 0.6                 # min keyword coverage for a turn to pass
+
+  # Layer 7 — Fairness / bias evaluation (src/evaluation/fairness_eval.py)
+  fairness:
+    enabled: true
+    golden_pairs_path: "tests/golden_fairness_pairs.json"
+    retrieval_jaccard_threshold: 0.5            # min mean pairwise retrieval overlap
+    answer_similarity_threshold: 0.80           # min mean pairwise answer-embedding similarity
+    embedding_model: "text-embedding-3-small"   # used to embed answers for similarity
+    live_sample_rate: 0.05                      # fraction of live requests checked in background
 
 # Production & Operations
 operations:
@@ -283,11 +312,13 @@ log:
   unknown_query_dir: "logs/feedback/unknown_queries"     # log unanswerable queries
   liked_response_dir: "logs/feedback/liked_responses"     # log liked responses
   disliked_response_dir: "logs/feedback/disliked_responses" # log disliked responses
+  cost_latency_ledger: "logs/cost_latency.jsonl"          # per-request cost/latency records
+  fairness_ledger: "logs/fairness.jsonl"                  # live fairness check records
 
 
 graphrag:
   enabled: true                                # Master switch. Set true to activate
-  run_community_detection: false               # Run CommunityDetector after ingestion (expensive — disable for incremental runs)
+  run_community_detection: true               # Run CommunityDetector after ingestion (expensive — disable for incremental runs)
 
   extraction_model: "gpt-4o"                   # Model for entity/rel extraction
   extraction_temperature: 0.0                  # Deterministic extraction
@@ -296,7 +327,7 @@ graphrag:
   max_chunk_chars: 4000                        # Truncate chunk text before LLM call
 
   community:
-    min_community_size: 3                      # Skip communities smaller than this
+    min_community_size: 1                      # Skip communities smaller than this
     resolution_levels: [1.0, 0.5]              # Louvain/Leiden resolutions (fine → coarse)
     summary_model: "gpt-4o"                    # Model for community summary generation
     max_entities_per_summary: 30               # Cap entities fed into summary prompt
@@ -309,164 +340,182 @@ graphrag:
     rrf_k: 60                                  # RRF smoothing constant
   
   entity_types:
- 
-    - DISEASE                         # Alzheimer's disease, vascular dementia, LBD, FTD
-    - DISEASE_STAGE                   # preclinical AD, prodromal, MCI, early/moderate/severe AD
-    - SYMPTOM                         # memory loss, apathy, agitation, hallucination, word-finding difficulty
-    - COMORBIDITY                     # hypertension, diabetes, obesity, cardiovascular disease
-    - SYNDROME                        # metabolic syndrome, frailty syndrome, amnestic MCI, dysexecutive syndrome
- 
-    - COGNITIVE_TEST                  # MMSE, MoCA, CDR, CDR-SB, ADAS-Cog, FAQ, Trail Making Test A/B
-    - COGNITIVE_DOMAIN                # episodic memory, working memory, executive function, processing speed
-    - COGNITIVE_SCORE                 # specific numeric score: MMSE=24, CDR-SB=4.5, z-score, percentile
-    - DIGITAL_ASSESSMENT              # DigiCog, BRANCH, app-based brain game, smartphone cognitive task
-    - REMOTE_MONITORING_PLATFORM      # DigiCog app, BRANCH platform, telehealth cognitive screening tool
-    - TEST_SESSION                    # day 1 / day 5 session in multi-day paradigms, baseline session
-    - PRACTICE_EFFECT                 # within-session or cross-day performance gain unrelated to true change
-    - LEARNING_CURVE                  # trajectory of scores across repeated sessions, slope of improvement
- 
-    - AMYLOID_BIOMARKER               # Aβ42, Aβ40, Aβ42/40 ratio, amyloid PET SUVR, plaque density
-    - TAU_BIOMARKER                   # pTau181, pTau217, pTau231, total tau, tau PET SUVR, NFTs
-    - NEURODEGENERATION_BIOMARKER     # NfL, GFAP, neurogranin, SNAP-25, synaptic damage markers
-    - IMAGING_BIOMARKER               # hippocampal volume, cortical thinning, FDG-PET, fMRI, DTI, FA
-    - BLOOD_BIOMARKER                 # plasma pTau217, plasma Aβ42/40, plasma NfL, plasma GFAP, CRP
-    - DIGITAL_BIOMARKER               # speech pause, lexical diversity, typing speed, gait from accelerometer
-    - COMPOSITE_BIOMARKER             # amyloid+tau score, ATN index, multimodal biomarker score, brain age gap
- 
-    - BRAIN_REGION                    # hippocampus, entorhinal cortex, prefrontal cortex, temporal lobe, amygdala
- 
-    - GENETIC_FACTOR                  # APOE ε4, TREM2, BIN1, CLU, PSEN1, PSEN2, APP mutation, SORL1
-    - RISK_SCORE                      # polygenic risk score, Framingham risk score, CAIDE score, frailty index
-    - VASCULAR_FACTOR                 # white matter hyperintensity, cerebral blood flow, BBB dysfunction, lacunes
-    - METABOLIC_FACTOR                # insulin resistance, HbA1c, BMI, dyslipidemia, metabolic syndrome
-    - LIFESTYLE_FACTOR                # sleep quality, physical activity, diet, smoking, alcohol, social engagement
-    - PSYCHIATRIC_VARIABLE            # depression, anxiety, apathy, NPI score, neuropsychiatric symptoms
-    - FUNCTIONAL_VARIABLE             # ADL, IADL, gait speed, falls frequency, functional impairment score
-    - NEUROINFLAMMATION_MARKER        # IL-6, TNF-α, IL-1β, CRP, YKL-40, microglial activation, TSPO PET
+    # ── Disease & Clinical Presentation ──────────────────────────────────────
+    - DISEASE                         # Alzheimer's disease, breast cancer, lung cancer, glioblastoma
+    - DISEASE_STAGE                   # MCI, preclinical AD, TNM stage I-IV, Gleason score, Dukes stage
+    - SYMPTOM                         # memory loss, fatigue, pain, dyspnoea, cognitive decline
+    - COMORBIDITY                     # hypertension, diabetes, cardiovascular disease, depression
+    # ── Biomarkers ───────────────────────────────────────────────────────────
+    - BIOMARKER                       # pTau217, Aβ42/40, NfL, GFAP (AD); CEA, CA-125, PSA, ctDNA (cancer)
+    - IMAGING_MODALITY                # amyloid PET, FDG-PET, MRI, CT, mammography, PET-CT
+    - ANATOMICAL_REGION               # hippocampus, entorhinal cortex; breast, lung, liver, lymph node
+    # ── Genetics & Risk ──────────────────────────────────────────────────────
+    - GENETIC_FACTOR                  # APOE ε4, PSEN1/2 (AD); BRCA1/2, TP53, KRAS, EGFR (cancer)
+    - RISK_FACTOR                     # age, smoking, BMI, family history, insulin resistance, radiation exposure
+    # ── Clinical Assessment ──────────────────────────────────────────────────
+    - CLINICAL_ASSESSMENT             # MMSE, MoCA, CDR (AD); ECOG, KPS, RECIST, tumour response criteria (cancer)
+    # ── Treatment ────────────────────────────────────────────────────────────
+    - DRUG                            # Lecanemab, Donepezil (AD); Pembrolizumab, Paclitaxel, Tamoxifen (cancer)
+    - INTERVENTION                    # cognitive training, surgery, radiotherapy, immunotherapy, lifestyle program
+    - TREATMENT_OUTCOME               # cognitive stabilisation, ARIA-E (AD); CR, PR, OS, PFS, recurrence (cancer)
+    # ── Mechanisms & Pathways ────────────────────────────────────────────────
+    - MECHANISM                       # amyloid cascade, synaptic dysfunction (AD); tumour microenvironment, angiogenesis (cancer)
+    - PATHWAY                         # neuroinflammatory cascade (AD); PI3K/AKT, EGFR signalling (cancer)
+    # ── Study & Evidence ─────────────────────────────────────────────────────
+    - COHORT                          # ADNI, NACC, A4 (AD); TCGA, SEER, clinical trial arms (cancer)
+    - STUDY_DESIGN                    # RCT, longitudinal observational, cross-sectional, case-control
+    - POPULATION                      # cognitively unimpaired older adults, MCI patients; early-stage cancer patients
     - DEMOGRAPHIC_VARIABLE            # age, sex, ethnicity, education years, socioeconomic status
-    - COGNITIVE_RESERVE               # education, occupational complexity, bilingualism, brain reserve index
- 
-    - PROGRESSION_VARIABLE            # annual decline rate, CDR-SB change, trajectory group, time-to-conversion
-    - OUTCOME_VARIABLE                # conversion to AD, survival, rapid decliner status, stable cognition
-    - TEMPORAL_VARIABLE               # baseline, 6-month follow-up, 12-month, 24-month, pre-symptomatic phase
- 
-    - DRUG                            # Donepezil, Memantine, Lecanemab, Aducanumab, Donanemab, Gantenerumab
-    - INTERVENTION                    # cognitive training, aerobic exercise, multimodal lifestyle intervention
-    - TREATMENT_OUTCOME               # amyloid reduction on PET, cognitive stabilization, ARIA-E, ARIA-H
- 
-    - MECHANISM                       # oxidative stress, synaptic dysfunction, tau propagation, neuronal loss
-    - PATHWAY                         # amyloid cascade, glymphatic clearance, neuroinflammatory cascade
-    - NETWORK                         # default mode network, salience network, functional connectivity pattern
- 
-    - COHORT                          # ADNI, NACC, Framingham, UK Biobank, BRANCH, DigiCog study, AIBL, A4
-    - STUDY_DESIGN                    # RCT, longitudinal observational, cross-sectional, case-control, pilot
-    - POPULATION                      # cognitively normal older adults, MCI patients, APOE ε4 carriers
-    - INCLUSION_CRITERION             # age range, NIA-AA diagnosis criteria, MMSE threshold, amyloid positivity
-    - EXCLUSION_CRITERION             # major psychiatric disorder, MRI contraindication, non-English speaker
-    - STUDY_FINDING                   # concrete result extracted from a paper: "pTau217 AUC=0.89 in ADNI"
- 
-    - RESEARCH_GAP                    # unexplored relationship, missing longitudinal data, under-studied population
-    - LIMITATION                      # small sample, selection bias, cross-sectional design, short follow-up
-    - FUTURE_WORK                     # proposed replication, suggested methodology, recommended biomarker study
-    - HYPOTHESIS                      # proposed causal mechanism, predicted relationship, testable claim
-    - REPLICATION_STATUS              # replicated, contradicted, needs replication, validated in independent cohort
- 
-    - STATISTICAL_METHOD              # LMM, GEE, Cox regression, SEM, mediation analysis, latent growth curve
-    - STATISTICAL_TEST                # t-test, ANOVA, Mann-Whitney, chi-square, Kruskal-Wallis, Fisher exact
-    - EFFECT_SIZE_METRIC              # Cohen's d, partial eta-squared, omega-squared, Hedges' g, Glass's delta
-    - REGRESSION_COEFFICIENT          # beta, standardized beta, odds ratio, hazard ratio, IRR, interaction term
-    - CORRELATION_METRIC              # Pearson r, Spearman rho, Kendall tau, ICC, Cronbach alpha, McDonald omega
-    - SIGNIFICANCE_RESULT             # p-value, FDR q-value, Bonferroni threshold, 95% CI, t-statistic, F-stat
-    - MODEL_FIT_METRIC                # R-squared, adjusted R-squared, AIC, BIC, RMSE, MAE, log-likelihood
-    - PERFORMANCE_METRIC              # AUC-ROC, AUC-PR, sensitivity, specificity, F1, MCC, Youden index
-    - FEATURE                         # predictor variable, input feature, LASSO-selected variable, top predictor
- 
-    - ML_MODEL                        # random forest, XGBoost, SVM, LSTM, transformer, BERT, BioBERT, ensemble
-    - EXPLAINABILITY_METHOD           # SHAP, LIME, permutation importance, attention map, integrated gradients
-    - DATASET                         # training set, test set, validation set, holdout set, cross-validation fold
-    - BENCHMARK                       # baseline model, state-of-the-art comparison, leaderboard, benchmark task
- 
-    - AI_MODEL                        # GPT-4, Claude, Llama, PubMedBERT, domain-adapted LLM, foundation model
-    - RAG_COMPONENT                   # retriever, generator, reranker, knowledge graph, vector store, chunker
-    - AGENTIC_AI_CONCEPT              # agent, tool use, orchestrator, multi-agent, ReAct, reasoning chain
- 
-    - DEVICE                          # smartphone, tablet, smartwatch, Apple Watch, Fitbit, voice assistant
-    - SENSOR                          # accelerometer, gyroscope, microphone, PPG sensor, EEG headset, ECG patch
-    - SENSOR_SIGNAL                   # step count, HRV, sleep stage, gait speed, voice recording, keystroke timing
- 
+    - OUTCOME_VARIABLE                # conversion to dementia, survival, recurrence, remission, stable cognition
+    - STUDY_FINDING                   # concrete extracted result: "pTau217 AUC=0.89"; "5-year OS=72%"
+    - LIMITATION                      # small sample, short follow-up, selection bias, single-centre design
+    # ── Statistical & ML ─────────────────────────────────────────────────────
+    - STATISTICAL_METHOD              # Cox regression, LMM, Kaplan-Meier, logistic regression, GEE
+    - PERFORMANCE_METRIC              # AUC-ROC, sensitivity, specificity, hazard ratio, C-index, F1
+
   relationship_types:
- 
+    # ── Association & Causation ───────────────────────────────────────────────
     - ASSOCIATED_WITH                 # general statistical association; directionality not established
     - PREDICTS                        # prospective prediction; implies temporal precedence
     - CORRELATES_WITH                 # concurrent correlation; no causal claim
-    - INCREASES_RISK_OF               # risk factor raises probability of disease or outcome
-    - REDUCES_RISK_OF                 # protective factor lowers probability of disease or outcome
-    - PRECEDES                        # temporal ordering: A comes before B
-    - CONVERTS_TO                     # clinical progression: MCI converts to AD dementia
-    - DECLINES_WITH                   # score, volume, or function declines with disease stage or time
-    - IMPROVES_WITH                   # score or function improves with intervention, time, or practice
- 
     - CAUSES                          # direct causal claim supported by experimental evidence
     - MEDIATES                        # B mediates the effect of A on C (A → B → C)
     - MODERATES                       # B moderates the effect of A on C; statistical interaction
-    - CONFOUNDED_BY                   # observed relationship is confounded by a third variable
-    - INTERACTS_WITH                  # biological or statistical interaction (e.g. APOE x sleep)
-    - ACCELERATES                     # factor speeds up progression or decline
-    - STABILIZES                      # factor slows or arrests progression
-    - INHIBITS                        # factor suppresses or down-regulates a mechanism
-    - COMPENSATES_FOR                 # cognitive reserve or compensatory mechanism offsets pathology
- 
-    - SIGNIFICANT_AT                  # finding is statistically significant at a reported threshold
-    - NOT_SIGNIFICANT                 # finding did not reach statistical significance; null result
-    - REPORTED_FOR                    # statistical result reported for a specific variable or comparison
-    - ADJUSTED_FOR                    # result adjusted for covariates at the analysis level
-    - COMPARED_BETWEEN                # statistic compared between two specific groups or conditions
-    - EFFECT_SIZE_OF                  # effect size metric quantifies magnitude of a specific finding
-    - CONFIDENCE_INTERVAL_OF          # CI bounds reported for a specific estimate
-    - CORRECTED_BY                    # p-value corrected by FDR, Bonferroni, or permutation method
- 
-    - IMPROVES_PREDICTION_OF          # adding feature X significantly improves model predicting Y
-    - SELECTED_AS_FEATURE_FOR         # variable selected by LASSO, importance ranking for a model/task
-    - EXPLAINS_VARIANCE_IN            # R-squared or partial R-squared: A explains variance in B
-    - OUTPERFORMS                     # model or method A outperforms B on a specific metric or task
-    - TRAINED_ON                      # model trained on a specific dataset or cohort
-    - VALIDATED_IN                    # finding or model validated in an independent cohort or dataset
-    - GENERALIZES_TO                  # model or finding generalizes to a new population or setting
-    - OVERFITS_ON                     # model shows overfitting on a specific dataset
- 
-    - TRACKS                          # digital or blood biomarker tracks an imaging or CSF biomarker
+    - INTERACTS_WITH                  # biological or statistical interaction (e.g. APOE × BRCA1)
+    # ── Risk & Progression ───────────────────────────────────────────────────
+    - INCREASES_RISK_OF               # risk factor raises probability of disease or adverse outcome
+    - REDUCES_RISK_OF                 # protective factor lowers probability of disease or adverse outcome
+    - ACCELERATES                     # factor speeds up disease progression or decline
+    - STABILIZES                      # factor slows or arrests disease progression
+    - PRECEDES                        # temporal ordering: A comes before B
+    # ── Treatment ────────────────────────────────────────────────────────────
+    - TREATS                          # drug or intervention treats a disease or symptom
+    - INHIBITS                        # drug or molecule suppresses a target, pathway, or mechanism
+    - RESPONDS_TO                     # tumour or patient responds to a specific treatment
+    # ── Biomarker ────────────────────────────────────────────────────────────
     - DIFFERENTIATES                  # biomarker or test differentiates group A from group B
-    - REPLACES                        # less invasive marker can replace a gold-standard measure
-    - CORRESPONDS_TO                  # digital measure corresponds to a validated clinical measure
-    - REFLECTS                        # biomarker reflects underlying neuropathology or mechanism
-    - PRECEDES_SYMPTOM_ONSET          # biomarker abnormality precedes clinical symptom onset
- 
-    - SUPPORTS_HYPOTHESIS             # evidence supports a proposed hypothesis
+    - REFLECTS                        # biomarker reflects underlying pathology or mechanism
+    - TRACKS                          # blood/digital biomarker tracks imaging or CSF gold standard
+    # ── Evidence & Validity ──────────────────────────────────────────────────
+    - VALIDATED_IN                    # finding or model validated in an independent cohort or dataset
+    - OUTPERFORMS                     # model or method A outperforms B on a specific metric or task
     - CONTRADICTS                     # finding contradicts a prior result or hypothesis
-    - REPLICATES                      # finding replicates a prior finding in an independent sample
-    - EXTENDS                         # study extends prior work to new population, modality, or condition
-    - ADDRESSES_GAP                   # study directly addresses an identified research gap
-    - IDENTIFIES_GAP                  # paper identifies this as an open research gap
-    - PROPOSES_FUTURE_WORK            # paper recommends this for future investigation
+    - REPLICATES                      # finding replicates a prior result in an independent sample
     - HIGHLIGHTS_LIMITATION           # paper flags this as a limitation of the current study
-    - GENERATES_HYPOTHESIS            # analysis or finding generates a new testable hypothesis
- 
+    # ── Study Design ─────────────────────────────────────────────────────────
     - CONDUCTED_IN                    # study conducted in a specific cohort or population
-    - USES_MEASURE                    # study uses a specific assessment, biomarker, or instrument
-    - COMPARES                        # study compares group A versus group B
-    - CONTROLS_FOR                    # study design controls for a covariate (design level)
-    - STRATIFIED_BY                   # analysis stratified by a variable (e.g. APOE status, sex)
-    - ADMINISTERED_TO                 # assessment or intervention administered to a population
-    - SUBSET_OF                       # entity A is a subset of entity B
- 
-    - ADMINISTERED_VIA                # test or task administered via a specific device or platform
-    - MEASURES_REMOTELY               # digital tool measures a cognitive domain or variable remotely
-    - PASSIVELY_MONITORS              # wearable or app passively monitors a variable without active input
-    - COLLECTED_VIA                   # data collected via a specific sensor, device, or platform
-    - CORRELATED_WITH_CLINICAL        # digital score correlated with a validated clinical measure
-    - EQUIVALENT_TO_CLINICAL          # digital measure shown equivalent to a clinical gold standard
- 
-    - EXPLAINED_BY                    # model output explained by an explainability method
-    - TOP_FEATURE_IN                  # variable is a top-ranked feature in a model
-    - INTERACTS_WITH_IN_MODEL         # two features show a significant interaction effect within a model
-    - SHAP_VALUE_OF                   # SHAP value quantifies contribution of a feature to model output
+    - CONTROLS_FOR                    # study controls for a covariate at the design or analysis level
+    - STRATIFIED_BY                   # analysis stratified by a variable (e.g. APOE status, cancer subtype)
+
+# ──────────────────────────────────────────────────────────────────────────
+# RLHF — reward modeling, PPO and DPO fine-tuning of the policy LLM
+# ──────────────────────────────────────────────────────────────────────────
+rlhf:
+  # Small open-weight instruction model used as the RLHF policy. The
+  # production `src.generation` pipeline calls hosted APIs (OpenAI/Cohere),
+  # which can't be fine-tuned directly — RLHF instead targets this local
+  # model, which can later be swapped in as a self-hosted generation backend.
+  policy_model: "Qwen/Qwen2.5-1.5B-Instruct"
+
+  feedback:
+    log_dir: "logs/feedback"
+    preference_pairs_path: "data/rlhf/preference_pairs.jsonl"
+    ppo_prompts_path: "data/rlhf/ppo_prompts.jsonl"
+
+  reward_model:
+    base_model: "Qwen/Qwen2.5-0.5B-Instruct"
+    num_labels: 1
+    output_dir: "models/reward_model"
+    lora:
+      r: 16
+      alpha: 32
+      dropout: 0.05
+      target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
+    training:
+      learning_rate: 1.0e-5
+      per_device_train_batch_size: 2
+      gradient_accumulation_steps: 4
+      num_train_epochs: 1
+      max_length: 1024
+
+  reward_function:
+    # Composite reward = weighted sum of the learned reward model score and
+    # cheap rule-based heuristics that mirror the generation quality bars
+    # enforced elsewhere in the system (citations, faithfulness, length).
+    weights:
+      learned_reward: 0.7
+      citation_score: 0.15
+      faithfulness: 0.1
+      length_penalty: 0.05
+    citation_pattern: '\[\d+\]'
+    target_length_tokens: 256
+    max_length_tokens: 512
+
+  ppo:
+    output_dir: "models/rlhf_policy/ppo"
+    lora:
+      r: 16
+      alpha: 32
+      dropout: 0.05
+      target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
+    training:
+      learning_rate: 1.0e-5
+      batch_size: 8
+      mini_batch_size: 2
+      gradient_accumulation_steps: 1
+      ppo_epochs: 4
+      max_new_tokens: 256
+      init_kl_coef: 0.2
+      target_kl: 6.0
+      total_episodes: 256
+
+  dpo:
+    output_dir: "models/rlhf_policy/dpo"
+    lora:
+      r: 16
+      alpha: 32
+      dropout: 0.05
+      target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
+    training:
+      learning_rate: 5.0e-6
+      beta: 0.1
+      per_device_train_batch_size: 2
+      gradient_accumulation_steps: 4
+      num_train_epochs: 1
+      max_length: 1024
+      max_prompt_length: 512
+
+# ──────────────────────────────────────────────────────────────────────────
+# Tuning — fine-tuning the reranker (cross-encoder) and embedding model (bi-encoder)
+# ──────────────────────────────────────────────────────────────────────────
+tuning:
+  reranker:
+    base_model: "BAAI/bge-reranker-large"  # matches retrieval.reranking.bge_model
+    output_dir: "models/reranker"
+    dataset_path: "data/tuning/reranker_pairs.jsonl"
+    negatives_per_query: 2
+    training:
+      num_epochs: 2
+      batch_size: 16
+      learning_rate: 2.0e-5
+      warmup_ratio: 0.1
+      max_length: 512
+
+  embedder:
+    base_model: "BAAI/bge-large-en-v1.5"  # matches embeddings.default_model
+    output_dir: "models/embedder"
+    dataset_path: "data/tuning/embedding_triplets.jsonl"
+    training:
+      num_epochs: 3
+      batch_size: 32
+      learning_rate: 2.0e-5
+      warmup_ratio: 0.1
+
+  hard_negatives:
+    # Shared by reranker_dataset and embedding_dataset — mines near-miss
+    # passages the current retriever ranks highly for a query but that are
+    # not in that query's golden relevant set.
+    num_per_query: 3
+    top_k_candidates: 20
+    similarity_floor: 0.3
+    similarity_ceiling: 0.85

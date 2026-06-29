@@ -1,23 +1,24 @@
-
 from __future__ import annotations
 
-from typing import List, Optional
 from pydantic import BaseModel, Field
 
+
 class CitationItem(BaseModel):
-    number: Optional[int] = None
-    chunk_id: Optional[str] = None
-    source_file: Optional[str] = None
-    source_name: Optional[str] = None
-    ingestion_ts: Optional[str] = None
-    excerpt: Optional[str] = None
+    number: int | None = None
+    chunk_id: str | None = None
+    source_file: str | None = None
+    source_name: str | None = None
+    ingestion_ts: str | None = None
+    excerpt: str | None = None
+
 
 class GenerationOutput(BaseModel):
 
     answer: str
-    citations: List[CitationItem] = Field(default_factory=list)
-    faithfulness_score: Optional[float] = None
+    citations: list[CitationItem] = Field(default_factory=list)
+    faithfulness_score: float | None = None
     has_conflict: bool = False
+
 
 class DirectResponseOutput(BaseModel):
     answer: str

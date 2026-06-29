@@ -1,0 +1,23 @@
+.git
+.github
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.deepeval
+.vscode
+.DS_Store
+
+# Large/runtime data — mounted as volumes or generated at runtime, not baked into the image
+knowledge_base
+artifacts
+eval_results
+logs
+qdrant_storage
+notes
+docs
+
+# Secrets — pass via env_file/environment at runtime, never bake into the image
+.env

@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 import numpy as np
-from agents import RunContextWrapper, function_tool
 
+from agents import RunContextWrapper, function_tool
 from src.agents.context import RAGRunContext
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 def _chunk_key(item) -> str:
     """Stable dedup key for a context item."""
     cid = getattr(item.chunk, "chunk_id", None)
     return cid if cid else item.chunk.text[:80]
+
 
 @function_tool
 async def graph_query(
@@ -23,29 +24,27 @@ async def graph_query(
 ) -> str:
     """
     Retrieve context from the knowledge graph (GraphRAG).
-
-    Precondition: ``retrieve_context`` must have been called so that
-    ``ctx.context._query_vector`` is populated.
-
-    Args:
-        mode: ``"local"``, ``"global"``, or ``"hybrid"`` (default).
-
-    Returns JSON compatible with retrieve_context output.
-    Side effect: merges graph ContextItems into ctx.context.context_items.
+    Requires retrieve_context to have run first (needs _query_vector).
+    mode: "local" | "global" | "hybrid" (default).
+    Merges graph results into ctx.context.context_items.
     """
     pq = ctx.context.processed_query
     if pq is None:
-        return json.dumps({
-            "error": "processed_query not set — run prepare_query first",
-            "chunks_retrieved": 0,
-        })
+        return json.dumps(
+            {
+                "error": "processed_query not set",
+                "chunks_retrieved": 0,
+            }
+        )
 
-    query_vector: Optional[np.ndarray] = ctx.context._query_vector
+    query_vector: np.ndarray | None = ctx.context._query_vector
     if query_vector is None:
-        return json.dumps({
-            "error": "_query_vector not set — run retrieve_context first",
-            "chunks_retrieved": 0,
-        })
+        return json.dumps(
+            {
+                "error": "_query_vector not set",
+                "chunks_retrieved": 0,
+            }
+        )
 
     container = ctx.context.container
     if container is None:
@@ -53,10 +52,12 @@ async def graph_query(
 
     gr = container.graph_retriever
     if gr is None:
-        return json.dumps({
-            "error": "GraphRAG is disabled or unavailable",
-            "chunks_retrieved": 0,
-        })
+        return json.dumps(
+            {
+                "error": "GraphRAG is disabled or unavailable",
+                "chunks_retrieved": 0,
+            }
+        )
 
     namespace = ctx.context.namespace or "default"
 
@@ -78,22 +79,24 @@ async def graph_query(
     new_items = [item for item in graph_items if _chunk_key(item) not in existing_keys]
     ctx.context.context_items = existing + new_items
 
-    sources = list({
-        item.chunk.source_name
-        for item in ctx.context.context_items
-        if item.chunk.source_name
-    })
+    sources = list(
+        {item.chunk.source_name for item in ctx.context.context_items if item.chunk.source_name}
+    )
 
     logger.info(
         "graph_query tool (%s): %d new graph items merged, total context=%d",
-        mode, len(new_items), len(ctx.context.context_items),
+        mode,
+        len(new_items),
+        len(ctx.context.context_items),
     )
 
-    return json.dumps({
-        "chunks_retrieved":  len(new_items),
-        "sources":           sources,
-        "retrieval_method":  f"graph_{mode}",
-        "cache_hit":         False,
-        "graph_items":       len(graph_items),
-        "vector_items":      len(existing),
-    })
+    return json.dumps(
+        {
+            "chunks_retrieved": len(new_items),
+            "sources": sources,
+            "retrieval_method": f"graph_{mode}",
+            "cache_hit": False,
+            "graph_items": len(graph_items),
+            "vector_items": len(existing),
+        }
+    )

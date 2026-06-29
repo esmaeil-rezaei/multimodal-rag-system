@@ -1,11 +1,10 @@
-
 from __future__ import annotations
 
 import functools
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from neo4j import GraphDatabase, Driver, Session
+from neo4j import Driver, GraphDatabase, Session
 from neo4j.exceptions import ServiceUnavailable, TransientError
 
 from src.config.settings import get_config, get_secrets
@@ -21,68 +20,53 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Name of the Neo4j vector index used for entity embedding similarity search.
 _ENTITY_VECTOR_INDEX = "entity_embeddings"
-
-# Vector dimension — must match the embedding model configured in settings.
-# Read from config at runtime in Neo4jGraphStore.__init__.
 _DEFAULT_EMBEDDING_DIM = 1024
-
-# Maximum retries for transient Neo4j errors.
 _MAX_RETRIES = 3
+
 
 def _with_retry(fn):
     """
     Wrap a Neo4j write function with simple exponential-backoff retry
     for TransientError (deadlocks, leader elections, etc.).
     """
+
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 return fn(*args, **kwargs)
             except (TransientError, ServiceUnavailable) as exc:
                 last_exc = exc
-                wait = 2 ** attempt
+                wait = 2**attempt
                 logger.warning(
                     "%s failed (attempt %d/%d): %s — retrying in %ds",
-                    fn.__name__, attempt, _MAX_RETRIES, exc, wait,
+                    fn.__name__,
+                    attempt,
+                    _MAX_RETRIES,
+                    exc,
+                    wait,
                 )
                 time.sleep(wait)
-        raise RuntimeError(
-            f"{fn.__name__} failed after {_MAX_RETRIES} retries: {last_exc}"
-        )
+        raise RuntimeError(f"{fn.__name__} failed after {_MAX_RETRIES} retries: {last_exc}")
 
     return wrapper
 
-class Neo4jGraphStore:
-    """
-    Manages all knowledge-graph persistence in Neo4j.
 
-    Config keys consumed from ``config.yaml`` (under ``graphrag.neo4j``):
-      - uri          : bolt/neo4j URI (default neo4j://localhost:7687)
-      - username     : Neo4j username
-      - password     : Neo4j password (also checked in Secrets)
-      - database     : database name (default "neo4j")
-      - max_connection_pool_size : driver pool size (default 50)
-    """
+class Neo4jGraphStore:
+    """Manages all knowledge-graph persistence in Neo4j."""
 
     def __init__(self) -> None:
         cfg = get_config()
         sec = get_secrets()
-        gr_cfg: Dict[str, Any] = cfg.get("graphrag", {})
-        neo4j_cfg: Dict[str, Any] = gr_cfg.get("neo4j", {})
+        gr_cfg: dict[str, Any] = cfg.get("graphrag", {})
+        neo4j_cfg: dict[str, Any] = gr_cfg.get("neo4j", {})
 
         uri = neo4j_cfg.get("uri", getattr(sec, "neo4j_uri", "neo4j://localhost:7687"))
         username = neo4j_cfg.get("username", getattr(sec, "neo4j_username", "neo4j"))
-        password = neo4j_cfg.get(
-            "password", getattr(sec, "neo4j_password", "password")
-        )
-        self._database: str = neo4j_cfg.get(
-            "database",
-            getattr(sec, "neo4j_database", "neo4j")
-        )
+        password = neo4j_cfg.get("password", getattr(sec, "neo4j_password", "password"))
+        self._database: str = neo4j_cfg.get("database", getattr(sec, "neo4j_database", "neo4j"))
         pool_size: int = neo4j_cfg.get("max_connection_pool_size", 50)
         self._embedding_dim: int = cfg.embeddings.get(
             "embedding_dimensions", _DEFAULT_EMBEDDING_DIM
@@ -98,11 +82,7 @@ class Neo4jGraphStore:
         self._ensure_constraints_and_indexes()
 
     def _ensure_constraints_and_indexes(self) -> None:
-        """
-        Create uniqueness constraints and vector index once at startup.
-
-        Safe to call multiple times — uses IF NOT EXISTS guards.
-        """
+        """Create uniqueness constraints and vector index at startup (idempotent)."""
         with self._session() as session:
             session.run(
                 "CREATE CONSTRAINT entity_node_id IF NOT EXISTS "
@@ -116,25 +96,16 @@ class Neo4jGraphStore:
                 "CREATE CONSTRAINT chunk_id IF NOT EXISTS "
                 "FOR (ch:Chunk) REQUIRE ch.chunk_id IS UNIQUE"
             )
+            session.run("CREATE INDEX entity_name IF NOT EXISTS " "FOR (e:Entity) ON (e.name)")
             session.run(
-                "CREATE INDEX entity_name IF NOT EXISTS "
-                "FOR (e:Entity) ON (e.name)"
-            )
-            session.run(
-                "CREATE INDEX entity_type_idx IF NOT EXISTS "
-                "FOR (e:Entity) ON (e.entity_type)"
+                "CREATE INDEX entity_type_idx IF NOT EXISTS " "FOR (e:Entity) ON (e.entity_type)"
             )
 
         self._ensure_vector_index()
         logger.info("Neo4j constraints and indexes ensured")
 
     def _ensure_vector_index(self) -> None:
-        """
-        Create the native vector index on Entity.embedding if absent.
-
-        Falls back gracefully on older Neo4j versions that don't support
-        the CREATE VECTOR INDEX syntax.
-        """
+        """Create the native vector index on Entity.embedding if absent."""
         cypher = (
             f"CREATE VECTOR INDEX {_ENTITY_VECTOR_INDEX} IF NOT EXISTS "
             f"FOR (e:Entity) ON (e.embedding) "
@@ -146,7 +117,8 @@ class Neo4jGraphStore:
                 session.run(cypher)
             logger.info(
                 "Vector index '%s' ensured (%d dims, cosine)",
-                _ENTITY_VECTOR_INDEX, self._embedding_dim,
+                _ENTITY_VECTOR_INDEX,
+                self._embedding_dim,
             )
         except Exception as exc:
             logger.warning(
@@ -157,15 +129,7 @@ class Neo4jGraphStore:
 
     @_with_retry
     def upsert_extraction(self, result: ExtractionResult) -> None:
-        """
-        Persist all entities and relationships from one ExtractionResult.
-
-        All writes are in a single transaction:
-        1. MERGE each EntityNode (keyed on node_id)
-        2. MERGE each RelationshipEdge (keyed on edge_id)
-        3. MERGE the Chunk node (keyed on chunk_id)
-        4. MERGE MENTIONS edges from Chunk → each Entity
-        """
+        """Persist all entities and relationships from one ExtractionResult in a single transaction."""
         with self._session() as session:
             with session.begin_transaction() as tx:
                 for entity in result.entities:
@@ -227,9 +191,7 @@ class Neo4jGraphStore:
                 tx.commit()
 
     @_with_retry
-    def update_entity_embedding(
-        self, node_id: str, embedding: List[float]
-    ) -> None:
+    def update_entity_embedding(self, node_id: str, embedding: list[float]) -> None:
         """Store or update the vector embedding on an Entity node."""
         with self._session() as session:
             session.run(
@@ -239,33 +201,24 @@ class Neo4jGraphStore:
             )
 
     @_with_retry
-    def batch_update_entity_embeddings(
-        self, pairs: List[tuple[str, List[float]]]
-    ) -> None:
-        """
-        Bulk update entity embeddings in a single transaction.
-
-        ``pairs`` is a list of (node_id, embedding_list) tuples.
-        This is significantly faster than calling update_entity_embedding()
-        in a loop.
-        """
+    def batch_update_entity_embeddings(self, pairs: list[tuple[str, list[float]]]) -> None:
+        """Bulk update entity embeddings in a single transaction."""
         with self._session() as session:
             with session.begin_transaction() as tx:
                 for node_id, embedding in pairs:
                     tx.run(
-                        "MATCH (e:Entity {node_id: $node_id}) "
-                        "SET e.embedding = $embedding",
+                        "MATCH (e:Entity {node_id: $node_id}) " "SET e.embedding = $embedding",
                         node_id=node_id,
                         embedding=embedding,
                     )
                 tx.commit()
 
     def get_entity_by_name(
-        self, name: str, entity_type: Optional[EntityType] = None
-    ) -> Optional[Dict[str, Any]]:
+        self, name: str, entity_type: EntityType | None = None
+    ) -> dict[str, Any] | None:
         """Fetch a single entity node by name (and optional type)."""
         cypher = "MATCH (e:Entity {name: $name})"
-        params: Dict[str, Any] = {"name": name}
+        params: dict[str, Any] = {"name": name}
         if entity_type:
             cypher += " WHERE e.entity_type = $entity_type"
             params["entity_type"] = entity_type.value
@@ -277,10 +230,10 @@ class Neo4jGraphStore:
     def get_entity_neighbors(
         self,
         node_id: str,
-        relation_types: Optional[List[RelationshipType]] = None,
+        relation_types: list[RelationshipType] | None = None,
         max_hops: int = 1,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Return neighbors of an entity up to ``max_hops`` hops away.
         Optionally filter by relationship type.
@@ -309,22 +262,17 @@ class Neo4jGraphStore:
 
     def get_entity_subgraph(
         self,
-        node_ids: List[str],
+        node_ids: list[str],
         max_hops: int = 2,
-    ) -> Dict[str, Any]:
-        """
-        Return the induced subgraph for a set of entity node_ids.
-
-        Useful for rendering a local neighbourhood for a query.
-        Returns {"nodes": [...], "edges": [...]}.
-        """
-        cypher = """
+    ) -> dict[str, Any]:
+        """Return the induced subgraph for a set of entity node_ids."""
+        cypher = f"""
             MATCH (e:Entity)
             WHERE e.node_id IN $node_ids
             OPTIONAL MATCH (e)-[r*1..{max_hops}]-(neighbor:Entity)
             RETURN collect(DISTINCT e) + collect(DISTINCT neighbor) AS nodes,
                    collect(DISTINCT r) AS edges
-        """.format(max_hops=max_hops)
+        """
         with self._session() as session:
             record = session.run(cypher, node_ids=node_ids).single()
             if not record:
@@ -336,20 +284,13 @@ class Neo4jGraphStore:
 
     def vector_search_entities(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         top_k: int = 10,
-        entity_type: Optional[EntityType] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        ANN search over entity embeddings using the Neo4j vector index.
-
-        Returns a list of dicts: {entity, score}.
-        """
-        # Build optional entity-type filter
+        entity_type: EntityType | None = None,
+    ) -> list[dict[str, Any]]:
+        """ANN search over entity embeddings using the Neo4j vector index; returns {entity, score} list."""
         filter_clause = (
-            f"WHERE candidate.entity_type = '{entity_type.value}'"
-            if entity_type
-            else ""
+            f"WHERE candidate.entity_type = '{entity_type.value}'" if entity_type else ""
         )
         cypher = f"""
             CALL db.index.vector.queryNodes($index_name, $top_k, $embedding)
@@ -365,12 +306,9 @@ class Neo4jGraphStore:
                 top_k=top_k,
                 embedding=query_embedding,
             )
-            return [
-                {"entity": dict(row["candidate"]), "score": row["score"]}
-                for row in result
-            ]
+            return [{"entity": dict(row["candidate"]), "score": row["score"]} for row in result]
 
-    def get_community_summary(self, community_id: str) -> Optional[str]:
+    def get_community_summary(self, community_id: str) -> str | None:
         """Return the LLM-generated summary for a community node."""
         with self._session() as session:
             record = session.run(
@@ -379,7 +317,7 @@ class Neo4jGraphStore:
             ).single()
             return record["summary"] if record else None
 
-    def get_chunks_for_entity(self, node_id: str) -> List[str]:
+    def get_chunks_for_entity(self, node_id: str) -> list[str]:
         """Return the chunk_ids of all chunks that mention this entity."""
         with self._session() as session:
             result = session.run(
@@ -391,7 +329,7 @@ class Neo4jGraphStore:
             )
             return [row["chunk_id"] for row in result if row["chunk_id"]]
 
-    def get_entity_communities(self, node_id: str) -> List[Dict[str, Any]]:
+    def get_entity_communities(self, node_id: str) -> list[dict[str, Any]]:
         """Return community nodes an entity belongs to (all levels)."""
         with self._session() as session:
             result = session.run(
@@ -403,11 +341,8 @@ class Neo4jGraphStore:
             )
             return [dict(row["c"]) for row in result]
 
-    def get_all_entities(self, limit: int = 10_000) -> List[Dict[str, Any]]:
-        """
-        Bulk fetch entity nodes for community detection.
-        Only returns node_id, name, entity_type — no embeddings — to keep payload small.
-        """
+    def get_all_entities(self, limit: int = 10_000) -> list[dict[str, Any]]:
+        """Bulk fetch entity nodes for community detection."""
         with self._session() as session:
             result = session.run(
                 """
@@ -420,11 +355,8 @@ class Neo4jGraphStore:
             )
             return [dict(row) for row in result]
 
-    def get_all_relationships(self, limit: int = 100_000) -> List[Dict[str, Any]]:
-        """
-        Bulk fetch edges for community detection.
-        Returns {source_id, target_id, relation_type, weight}.
-        """
+    def get_all_relationships(self, limit: int = 100_000) -> list[dict[str, Any]]:
+        """Bulk fetch edges for community detection."""
         with self._session() as session:
             result = session.run(
                 """
@@ -443,7 +375,7 @@ class Neo4jGraphStore:
         self._driver.close()
         logger.info("Neo4j driver closed")
 
-    def __enter__(self) -> "Neo4jGraphStore":
+    def __enter__(self) -> Neo4jGraphStore:
         return self
 
     def __exit__(self, *_) -> None:
@@ -471,7 +403,11 @@ class Neo4jGraphStore:
             """,
             node_id=entity.node_id,
             name=entity.name,
-            entity_type=entity.entity_type.value if hasattr(entity.entity_type, "value") else str(entity.entity_type),
+            entity_type=(
+                entity.entity_type.value
+                if hasattr(entity.entity_type, "value")
+                else str(entity.entity_type)
+            ),
             description=entity.description,
             confidence=entity.confidence,
             updated_at=entity.updated_at,
@@ -479,8 +415,11 @@ class Neo4jGraphStore:
             source_chunks=entity.source_chunks,
             properties=str(entity.properties),
         )
-        # Also ensure the specific label exists (e.g., :PERSON, :ORGANIZATION)
-        et_value = entity.entity_type.value if hasattr(entity.entity_type, "value") else str(entity.entity_type)
+        et_value = (
+            entity.entity_type.value
+            if hasattr(entity.entity_type, "value")
+            else str(entity.entity_type)
+        )
         tx.run(
             f"MATCH (e:Entity {{node_id: $node_id}}) SET e:{et_value}",
             node_id=entity.node_id,
@@ -488,7 +427,11 @@ class Neo4jGraphStore:
 
     @staticmethod
     def _merge_relationship(tx, edge: RelationshipEdge) -> None:
-        rel_type = edge.relation_type.value if hasattr(edge.relation_type, "value") else str(edge.relation_type)
+        rel_type = (
+            edge.relation_type.value
+            if hasattr(edge.relation_type, "value")
+            else str(edge.relation_type)
+        )
         tx.run(
             f"""
             MATCH (a:Entity {{node_id: $source_id}})

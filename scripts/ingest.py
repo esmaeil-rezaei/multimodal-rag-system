@@ -1,34 +1,39 @@
-import logging
 import argparse
+import logging
 from pathlib import Path
 
-from src.utils.logger import get_logger, set_correlation_id
-from src.ingestion.pipeline import IngestionPipeline
 from src.config.settings import get_config
+from src.ingestion.pipeline import IngestionPipeline
+from src.utils.logger import get_logger, set_correlation_id
 
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
 logger = get_logger("scripts.ingest")
+
 
 def _discover_namespaces() -> list[str]:
     cfg = get_config()
     kb_root = Path(cfg.knowledge_base["root_dir"])
     if not kb_root.exists():
         return []
-    return sorted([
-        d.name for d in kb_root.iterdir()
-        if d.is_dir() and not d.name.startswith(".")
-    ])
+    return sorted([d.name for d in kb_root.iterdir() if d.is_dir() and not d.name.startswith(".")])
+
 
 def _abort_namespace(given: str, available: list[str]) -> None:
     kb_root = get_config().knowledge_base["root_dir"]
-    avail_str = ", ".join(available) if available else f"(none — create a subfolder inside {kb_root}/)"
+    avail_str = (
+        ", ".join(available) if available else f"(none — create a subfolder inside {kb_root}/)"
+    )
     logger.error(
         "Namespace '%s' does not exist. Expected folder: %s/%s/  Available: %s  "
         "Tip: run with --all to ingest every namespace automatically.",
-        given, kb_root, given, avail_str,
+        given,
+        kb_root,
+        given,
+        avail_str,
     )
     raise SystemExit(1)
+
 
 def _abort_no_namespaces() -> None:
     kb_root = get_config().knowledge_base["root_dir"]
@@ -37,6 +42,7 @@ def _abort_no_namespaces() -> None:
         kb_root,
     )
     raise SystemExit(1)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run ingestion pipeline")
@@ -78,7 +84,11 @@ def main() -> None:
 
     else:
         kb_root = get_config().knowledge_base["root_dir"]
-        avail_str = ", ".join(available) if available else f"(none found — create a subfolder inside {kb_root}/)"
+        avail_str = (
+            ", ".join(available)
+            if available
+            else f"(none found — create a subfolder inside {kb_root}/)"
+        )
         print(
             f"\nNo namespace specified.\n"
             f"Usage:  python -m scripts.ingest --namespace <name>\n"
@@ -88,6 +98,7 @@ def main() -> None:
             f"         python -m scripts.ingest --all   (ingest all namespaces at once)\n"
         )
         raise SystemExit(1)
+
 
 if __name__ == "__main__":
     main()

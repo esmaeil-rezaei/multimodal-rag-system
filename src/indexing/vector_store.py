@@ -1,20 +1,19 @@
-
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import random
+from typing import Any
 
 import numpy as np
-import random
-
+from elasticsearch import Elasticsearch
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
-from elasticsearch import Elasticsearch
 
 from src.config.settings import get_config, get_secrets
 from src.ingestion.parser import ParsedChunk
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
 
 class SearchResult:
     """
@@ -33,6 +32,7 @@ class SearchResult:
         self.retrieval_method = retrieval_method
         self.rank = rank
 
+
 class DenseVectorStore:
     """
     Qdrant wrapper for dense vector indexing and ANN search.
@@ -45,7 +45,7 @@ class DenseVectorStore:
         self._collection = self._vs_cfg["collection_name"]
 
         if "localhost" in sec.qdrant_url or "127.0.0.1" in sec.qdrant_url:
-            local_path = str("qdrant_storage")
+            local_path = "qdrant_storage"
             self._client = QdrantClient(path=local_path)
             logger.info(f"Qdrant running in local embedded mode → {local_path}")
         else:
@@ -57,12 +57,12 @@ class DenseVectorStore:
         self._ensure_collection()
 
     def _ensure_collection(self) -> None:
-        """
-        Create the Qdrant collection with HNSW parameters if it doesn't exist.
-        """
+        """Create the Qdrant collection with HNSW parameters if it doesn't exist."""
         existing = [c.name for c in self._client.get_collections().collections]
         if self._collection in existing:
-            logger.debug(f"Qdrant collection '{self._collection}' already exists — skipping creation")
+            logger.debug(
+                f"Qdrant collection '{self._collection}' already exists — skipping creation"
+            )
             return
 
         hnsw_cfg = self._vs_cfg["hnsw"]
@@ -79,18 +79,16 @@ class DenseVectorStore:
                 ef_construct=hnsw_cfg["ef_construct"],
                 full_scan_threshold=10_000,
             ),
-            on_disk_payload=True,                        # Store payload on disk to reduce RAM usage
+            on_disk_payload=True,
         )
         logger.info(f"Created Qdrant collection '{self._collection}' with HNSW(m={hnsw_cfg['m']})")
 
-    def upsert(
-        self, chunk: ParsedChunk, vector: np.ndarray, namespace: Optional[str] = None
-    ) -> None:
+    def upsert(self, chunk: ParsedChunk, vector: np.ndarray, namespace: str | None = None) -> None:
         """Upsert a chunk and its embedding into Qdrant."""
 
         payload = {
             "text": chunk.text,
-            "chunk_id": chunk.chunk_id,             # preserve original id for round-trip lookup
+            "chunk_id": chunk.chunk_id,  # preserve original id for round-trip lookup
             "source_file": chunk.source_file,
             "source_name": chunk.source_name,
             "modality": chunk.modality,
@@ -116,10 +114,8 @@ class DenseVectorStore:
         )
 
     @staticmethod
-    def _sanitize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Ensure payload is JSON-serializable for Qdrant.
-        """
+    def _sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        """Ensure payload is JSON-serializable for Qdrant."""
 
         _ALLOWED = (str, int, float, bool, type(None))
 
@@ -128,7 +124,7 @@ class DenseVectorStore:
                 return v
             if isinstance(v, dict):
                 return {str(k): _clean(val) for k, val in v.items()}
-            if isinstance(v, (list, tuple)):
+            if isinstance(v, list | tuple):
                 return [_clean(i) for i in v]
             if isinstance(v, np.integer):
                 return int(v)
@@ -145,20 +141,14 @@ class DenseVectorStore:
         self,
         query_vector: np.ndarray,
         top_k: int = 10,
-        namespace: Optional[str] = None,
-        metadata_filter: Optional[Dict[str, Any]] = None,
-        ef_search: Optional[int] = None,
-    ) -> List[SearchResult]:
-
-        """
-        Run ANN search in Qdrant.
-        """
+        namespace: str | None = None,
+        metadata_filter: dict[str, Any] | None = None,
+        ef_search: int | None = None,
+    ) -> list[SearchResult]:
+        """Run ANN search in Qdrant."""
 
         must_conditions = []
 
-        # Restrict ANN search to paragraph-level nodes only.
-        # Section and document nodes live in Qdrant solely as expansion
-        # targets for _fetch_chunk_by_id — they must never appear in search results.
         must_conditions.append(
             qdrant_models.FieldCondition(
                 key="hierarchy_level",
@@ -174,13 +164,11 @@ class DenseVectorStore:
                 )
             )
 
-        query_filter = (
-            qdrant_models.Filter(must=must_conditions) if must_conditions else None
-        )
+        query_filter = qdrant_models.Filter(must=must_conditions) if must_conditions else None
 
         search_params = qdrant_models.SearchParams(
-            hnsw_ef=ef_search or self._vs_cfg["hnsw"]["ef_search"],  # tune recall vs latency
-            exact=False,                            # Use ANN (not brute force)
+            hnsw_ef=ef_search or self._vs_cfg["hnsw"]["ef_search"],
+            exact=False,
         )
 
         response = self._client.query_points(
@@ -207,8 +195,6 @@ class DenseVectorStore:
                 ingestion_ts=payload.get("ingestion_ts"),
                 metadata=payload,
             )
-            # Prefer the original chunk_id stored in the payload; fall back to the
-            # Qdrant point ID (decimal string) for collections indexed before this fix.
             chunk.chunk_id = payload.get("chunk_id") or str(hit.id)
             search_results.append(
                 SearchResult(chunk=chunk, score=hit.score, retrieval_method="dense")
@@ -217,14 +203,8 @@ class DenseVectorStore:
         return search_results
 
     @staticmethod
-    def _chunk_id_to_int(chunk_id: Optional[str]) -> int:
-        """
-        Convert a chunk_id to a 64-bit integer for use as a Qdrant point ID.
-
-        Accepts two formats:
-          - Plain decimal string  (``str(hit.id)`` from old collections)
-          - Hex SHA-256 / UUID prefix (takes first 16 hex chars, ignoring hyphens)
-        """
+    def _chunk_id_to_int(chunk_id: str | None) -> int:
+        """Convert a chunk_id string to a 64-bit integer for use as a Qdrant point ID."""
         if not chunk_id:
             return random.getrandbits(32)
         # Fast path: already a plain decimal integer (legacy round-trip IDs)
@@ -236,6 +216,7 @@ class DenseVectorStore:
         hex_clean = chunk_id.replace("-", "")
         return int(hex_clean[:16], 16)
 
+
 class SparseIndex:
     """Elasticsearch wrapper for BM25 search."""
 
@@ -246,7 +227,7 @@ class SparseIndex:
         self._index_name = self._vs_cfg["hybrid_search"]["sparse_index_name"]
         self._available = False
 
-        es_kwargs: Dict[str, Any] = {"hosts": [sec.elasticsearch_url]}
+        es_kwargs: dict[str, Any] = {"hosts": [sec.elasticsearch_url]}
         if sec.elasticsearch_api_key:
             es_kwargs["api_key"] = sec.elasticsearch_api_key
         self._es = Elasticsearch(**es_kwargs)
@@ -307,7 +288,7 @@ class SparseIndex:
             "source_name": chunk.source_name,
             "namespace": chunk.metadata.get("namespace", "default"),
             "ingestion_ts": chunk.ingestion_ts,
-            **{k: v for k, v in chunk.metadata.items() if isinstance(v, (str, int, float, bool))},
+            **{k: v for k, v in chunk.metadata.items() if isinstance(v, str | int | float | bool)},
         }
         self._es.index(index=self._index_name, id=chunk.chunk_id, document=doc)
 
@@ -315,15 +296,15 @@ class SparseIndex:
         self,
         query: str,
         top_k: int = 10,
-        namespace: Optional[str] = None,
-    ) -> List[SearchResult]:
+        namespace: str | None = None,
+    ) -> list[SearchResult]:
         """
         BM25 keyword search using Elasticsearch.
         Optionally filtered to a tenant namespace.
         """
         if not self._available:
             return []
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "size": top_k,
             "query": {
                 "bool": {
@@ -331,8 +312,8 @@ class SparseIndex:
                         {
                             "match": {
                                 "text": {
-                                    "query":     query,
-                                    "operator":  "or",
+                                    "query": query,
+                                    "operator": "or",
                                     "fuzziness": "AUTO",
                                     "prefix_length": 1,
                                     "max_expansions": 50,
@@ -365,6 +346,7 @@ class SparseIndex:
             )
         return results
 
+
 class HybridSearchEngine:
     """
     Runs dense and sparse search in parallel and merges results via RRF.
@@ -384,15 +366,15 @@ class HybridSearchEngine:
         query: str,
         query_vector: np.ndarray,
         top_k: int = 10,
-        namespace: Optional[str] = None,
-        metadata_filter: Optional[Dict[str, Any]] = None,
-    ) -> List[SearchResult]:
+        namespace: str | None = None,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[SearchResult]:
         """
         Runs dense (ANN) and sparse (BM25) search, then fuses results with RRF.
         """
         dense_results = self._dense.search(
             query_vector=query_vector,
-            top_k=top_k * 2,                        # Over-retrieve to compensate for fusion reordering
+            top_k=top_k * 2,
             namespace=namespace,
             metadata_filter=metadata_filter,
         )
@@ -408,23 +390,16 @@ class HybridSearchEngine:
 
     def _reciprocal_rank_fusion(
         self,
-        dense: List[SearchResult],
-        sparse: List[SearchResult],
+        dense: list[SearchResult],
+        sparse: list[SearchResult],
         top_k: int,
-    ) -> List[SearchResult]:
-        """
-        Merge two ranked lists using Reciprocal Rank Fusion (RRF).
-
-        RRF score = Σ  1 / (k + rank_i)
-        where k is the RRF smoothing constant (typically 60) and
-        rank_i is the 1-based position of a result in each list.
-        """
+    ) -> list[SearchResult]:
+        """Merge two ranked lists using Reciprocal Rank Fusion."""
         rrf_k = self._cfg["rrf_k"]
-        scores: Dict[str, float] = {}
-        chunk_map: Dict[str, SearchResult] = {}
+        scores: dict[str, float] = {}
+        chunk_map: dict[str, SearchResult] = {}
 
-        def _accumulate(results: List[SearchResult]) -> None:
-            """Add RRF contribution from one result list."""
+        def _accumulate(results: list[SearchResult]) -> None:
             for rank, result in enumerate(results, start=1):
                 cid = result.chunk.chunk_id or hash(result.chunk.text)
                 scores[cid] = scores.get(cid, 0.0) + 1.0 / (rrf_k + rank)

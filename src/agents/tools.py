@@ -1,63 +1,96 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
-from agents import RunContextWrapper, function_tool
 
+from agents import RunContextWrapper, function_tool
 from src.agents.context import RAGRunContext
 from src.config.settings import get_config
-from src.operations.ops_middleware import TraceSpan, SemanticCache
+from src.operations.ops_middleware import SemanticCache, TraceSpan
 from src.query.understanding import ProcessedQuery
 from src.utils.logger import get_logger, set_correlation_id
 
 logger = get_logger(__name__)
 _cfg = get_config()
 
+
+def _run_online_eval_bg(ev, raw_q: str, answer: str, context_texts: list[str]) -> None:
+    """Run RAGAS online evaluation in a background thread."""
+    try:
+        report = ev.evaluate_online(
+            query=raw_q,
+            answer=answer,
+            context_texts=context_texts,
+        )
+        logger.info(
+            "Online evaluation complete",
+            extra={
+                "overall_score": report.overall_score,
+                "scores": report.ragas_scores or report.custom_judge_scores,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Online evaluation failed (non-fatal): %s", exc)
+
+
 def _container(ctx: RunContextWrapper[RAGRunContext]):
-    """Resolve the AppContainer — fails fast with a clear message."""
     c = ctx.context.container
     if c is None:
-        raise RuntimeError(
-            "AppContainer not attached to RAGRunContext. "
-            "Ensure RAGOrchestrator passes container= when constructing the context."
-        )
+        raise RuntimeError("AppContainer not attached to RAGRunContext")
     return c
+
 
 @function_tool
 async def get_conversation_history(
     ctx: RunContextWrapper[RAGRunContext],
 ) -> str:
-    return json.dumps({
-        "conversation_history": ctx.context.conversation_history[-5:] if ctx.context.conversation_history else []
-        })
+    return json.dumps(
+        {
+            "conversation_history": (
+                ctx.context.conversation_history[-5:] if ctx.context.conversation_history else []
+            )
+        }
+    )
+
+
+@function_tool
+async def get_routing_intent(
+    ctx: RunContextWrapper[RAGRunContext],
+) -> str:
+    """
+    Returns the pre-computed routing intent for the current query.
+    Use this instead of examining conversation history directly.
+    Values: 'conversational' | 'followup' | 'retrieval'
+    """
+    return json.dumps(
+        {
+            "query_routing_intent": ctx.context.query_routing_intent,
+            "has_history": bool(ctx.context.conversation_history),
+        }
+    )
+
 
 @function_tool
 async def prepare_query(
     ctx: RunContextWrapper[RAGRunContext],
     query: str,
 ) -> str:
-    """
-    Run query understanding: rewrite, decompose, HyDE, entity filters.
-    Stores the ProcessedQuery on ctx.context.processed_query.
-    """
+    """Run query understanding: rewrite, decompose, HyDE, entity filters."""
     if not getattr(ctx.context, "correlation_id", None):
         ctx.context.correlation_id = set_correlation_id()
 
-    logger.info("understand_query tool started",
-                extra={"query": query, "correlation_id": ctx.context.correlation_id})
+    logger.info(
+        "understand_query tool started",
+        extra={"query": query, "correlation_id": ctx.context.correlation_id},
+    )
 
     qu = _container(ctx).query_understanding
 
-    # If the orchestrator already condensed a follow-up into a standalone
-    # query (stored as a string in processed_query before this tool runs),
-    # prefer that over whatever the agent forwarded.  This ensures retrieval
-    # uses a well-formed question even when the raw input is vague ("what
-    # about it?", "tell me more", etc.).
     if isinstance(ctx.context.processed_query, str) and ctx.context.processed_query:
         effective_query = ctx.context.processed_query
     else:
@@ -73,58 +106,55 @@ async def prepare_query(
             ctx.context.processed_query = pq
             ctx.context.record("understand_query_tool", f"{len(pq.sub_questions)} sub-questions")
 
-            sub_questions = [
-                sq if isinstance(sq, str) else sq.text for sq in pq.sub_questions
-            ]
+            sub_questions = [sq if isinstance(sq, str) else sq.text for sq in pq.sub_questions]
 
             if pq.hypothetical_doc is not None:
-                logger.info("HyDE document generated — dual retrieval will be used",
-                            extra={"hyde_preview": pq.hypothetical_doc[:120]})
+                logger.info(
+                    "HyDE document generated — dual retrieval will be used",
+                    extra={"hyde_preview": pq.hypothetical_doc[:120]},
+                )
 
-            return json.dumps({
-                "standalone_query": pq.standalone_query,
-                "sub_questions": sub_questions,
-                "search_queries": [pq.standalone_query] + sub_questions,
-                "requires_hyde": pq.hypothetical_doc is not None,
-                "metadata_filters": pq.metadata_filters,
-            })
+            return json.dumps(
+                {
+                    "standalone_query": pq.standalone_query,
+                    "sub_questions": sub_questions,
+                    "search_queries": [pq.standalone_query] + sub_questions,
+                    "requires_hyde": pq.hypothetical_doc is not None,
+                    "metadata_filters": pq.metadata_filters,
+                }
+            )
         except Exception as exc:
             logger.error("understand_query tool failed: %s", exc, exc_info=True)
             return json.dumps({"error": str(exc), "standalone_query": query})
+
 
 @function_tool
 async def retrieve_context(
     ctx: RunContextWrapper[RAGRunContext],
 ) -> str:
-    """
-    Embed the query, check semantic cache, run hybrid multi-query retrieval.
-    Stores context items on ctx.context.context_items.
-    Namespace is read from ctx.context.namespace (set by the orchestrator).
-    """
+    """Embed the query, check semantic cache, run hybrid multi-query retrieval."""
     pq = ctx.context.processed_query
     if pq is None:
         return json.dumps({"error": "processed_query not set — run prepare_query first"})
 
     container = _container(ctx)
-    embedder   = container.embedder
-    retriever  = container.retriever
-    evaluator  = container.evaluator
+    embedder = container.embedder
+    retriever = container.retriever
+    evaluator = container.evaluator
 
     namespace = ctx.context.namespace or "default"
 
     with TraceSpan("query_embedding"):
         try:
-            query_vector: np.ndarray = embedder.embed_query(
-                pq.final_query(), language=pq.language
-            )
+            query_vector: np.ndarray = embedder.embed_query(pq.final_query(), language=pq.language)
 
-            hyde_vector: Optional[np.ndarray] = None
+            hyde_vector: np.ndarray | None = None
             if pq.hypothetical_doc is not None:
-                hyde_vector = embedder.embed_query(
-                    pq.hypothetical_doc, language=pq.language
+                hyde_vector = embedder.embed_query(pq.hypothetical_doc, language=pq.language)
+                logger.info(
+                    "HyDE vector generated — dual retrieval will be used",
+                    extra={"hyde_preview": pq.hypothetical_doc[:120]},
                 )
-                logger.info("HyDE vector generated — dual retrieval will be used",
-                            extra={"hyde_preview": pq.hypothetical_doc[:120]})
 
             sub_vectors = []
             for sq in pq.sub_questions:
@@ -135,8 +165,11 @@ async def retrieve_context(
                     logger.warning("Sub-question embedding failed for '%s': %s", sq[:60], exc)
 
             if sub_vectors:
-                logger.info("Sub-question vectors generated: %d / %d",
-                            len(sub_vectors), len(pq.sub_questions))
+                logger.info(
+                    "Sub-question vectors generated: %d / %d",
+                    len(sub_vectors),
+                    len(pq.sub_questions),
+                )
 
         except Exception as exc:
             logger.error("Embedding failed: %s", exc, exc_info=True)
@@ -154,12 +187,14 @@ async def retrieve_context(
         logger.info("Cache hit — skipping retrieval and generation")
         ctx.context.generation_result = cached
         ctx.context.record("retrieve_context_tool", "cache_hit")
-        return json.dumps({
-            "chunks_retrieved": 0,
-            "sources": [],
-            "retrieval_method": "cache",
-            "cache_hit": True,
-        })
+        return json.dumps(
+            {
+                "chunks_retrieved": 0,
+                "sources": [],
+                "retrieval_method": "cache",
+                "cache_hit": True,
+            }
+        )
 
     try:
         evaluator.update_reference_distribution(query_vector)
@@ -175,7 +210,7 @@ async def retrieve_context(
                     pq=pq,
                     query_vector=query_vector,
                     sub_vectors=sub_vectors,
-                    hyde_vector=hyde_vector,   # may be None — retriever handles it
+                    hyde_vector=hyde_vector,  # may be None — retriever handles it
                     namespace=namespace,
                 )
                 method = "multi_query"
@@ -197,25 +232,25 @@ async def retrieve_context(
 
             ctx.context.context_items = context_items
             ctx.context._query_vector = query_vector
-            ctx.context.record("retrieve_context_tool",
-                               f"{len(context_items)} chunks via {method}")
+            ctx.context.record("retrieve_context_tool", f"{len(context_items)} chunks via {method}")
 
-            sources = list({
-                item.chunk.source_name
-                for item in context_items
-                if item.chunk.source_name
-            })
+            sources = list(
+                {item.chunk.source_name for item in context_items if item.chunk.source_name}
+            )
 
-            return json.dumps({
-                "chunks_retrieved": len(context_items),
-                "sources": sources,
-                "retrieval_method": method,
-                "cache_hit": False,
-            })
+            return json.dumps(
+                {
+                    "chunks_retrieved": len(context_items),
+                    "sources": sources,
+                    "retrieval_method": method,
+                    "cache_hit": False,
+                }
+            )
 
         except Exception as exc:
             logger.error("retrieve_context tool failed: %s", exc, exc_info=True)
             return json.dumps({"error": str(exc), "chunks_retrieved": 0})
+
 
 @function_tool
 async def generate_from_history(
@@ -231,23 +266,14 @@ async def generate_from_history(
     if not history:
         return json.dumps({"answer": "", "needs_retrieval": True})
 
-    # Prefer the condensed standalone query (has full context baked in);
-    # fall back to the raw original question.
     condensed = ctx.context.processed_query
-    question = (
-        condensed
-        if isinstance(condensed, str) and condensed
-        else ctx.context.raw_query
-    )
+    question = condensed if isinstance(condensed, str) and condensed else ctx.context.raw_query
 
     container = _container(ctx)
     openai_client = container.generator._openai
     gen_cfg = get_config().generation
 
-    history_text = "\n".join(
-        f"{msg['role'].upper()}: {msg['content']}"
-        for msg in history[-10:]
-    )
+    history_text = "\n".join(f"{msg['role'].upper()}: {msg['content']}" for msg in history[-10:])
 
     system_prompt = (
         "You are a precise question-answering assistant.\n"
@@ -259,17 +285,14 @@ async def generate_from_history(
         "3. If the answer is genuinely not present in the history, "
         "respond with exactly the token: NEEDS_RETRIEVAL"
     )
-    user_prompt = (
-        f"CONVERSATION HISTORY:\n{history_text}\n\n"
-        f"QUESTION: {question}"
-    )
+    user_prompt = f"CONVERSATION HISTORY:\n{history_text}\n\n" f"QUESTION: {question}"
 
     try:
         response = openai_client.chat.completions.create(
             model=gen_cfg["model"],
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
             max_tokens=gen_cfg.get("max_tokens", 1024),
@@ -283,8 +306,10 @@ async def generate_from_history(
         return json.dumps({"answer": "", "needs_retrieval": True})
 
     from src.generation.generator import GenerationResult
+
     ctx.context.generation_result = GenerationResult(
-        answer=answer, model_used="FollowUpAgent"
+        answer=answer,
+        model_used="FollowUpAgent",
     )
     return json.dumps({"answer": answer, "needs_retrieval": False})
 
@@ -293,15 +318,11 @@ async def generate_from_history(
 async def generate_answer(
     ctx: RunContextWrapper[RAGRunContext],
 ) -> str:
-    """
-    Generate a grounded answer from retrieved context.
-    Also writes cache, runs online evaluation.
-    """
-    pq            = ctx.context.processed_query
+    """Generate a grounded answer from retrieved context."""
+    pq = ctx.context.processed_query
     context_items = ctx.context.context_items
 
     if not context_items:
-        # Log unanswered query
         unanswered_dir = Path(_cfg.log.get("unknown_query_dir", "logs/unknown"))
         unanswered_dir.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -319,12 +340,14 @@ async def generate_answer(
         except Exception as exc:
             logger.warning("Failed to write unanswered query log: %s", exc)
 
-        return json.dumps({
-            "answer": "I could not find relevant information to answer your question.",
-            "citations": [],
-            "faithfulness_score": None,
-            "has_conflict": False,
-        })
+        return json.dumps(
+            {
+                "answer": "I could not find relevant information to answer your question.",
+                "citations": [],
+                "faithfulness_score": None,
+                "has_conflict": False,
+            }
+        )
 
     container = _container(ctx)
     generator = container.generator
@@ -333,25 +356,26 @@ async def generate_answer(
     with TraceSpan("generation"):
         try:
             query_text = (
-                pq.original_query
-                if isinstance(pq, ProcessedQuery)
-                else ctx.context.raw_query
+                pq.original_query if isinstance(pq, ProcessedQuery) else ctx.context.raw_query
             )
+            user_preferences = getattr(ctx.context, "user_preferences", None) or []
             result = generator.generate(
                 query=query_text,
                 context_items=context_items,
+                extra_instructions=user_preferences or None,
             )
             ctx.context.generation_result = result
-            ctx.context.record("generate_answer_tool",
-                               f"faithfulness={result.faithfulness_score}")
+            ctx.context.record("generate_answer_tool", f"faithfulness={result.faithfulness_score}")
         except Exception as exc:
             logger.error("generate_answer tool failed during generation: %s", exc, exc_info=True)
-            return json.dumps({
-                "answer": "An error occurred while generating the answer.",
-                "citations": [],
-                "faithfulness_score": None,
-                "has_conflict": False,
-            })
+            return json.dumps(
+                {
+                    "answer": "An error occurred while generating the answer.",
+                    "citations": [],
+                    "faithfulness_score": None,
+                    "has_conflict": False,
+                }
+            )
 
     with TraceSpan("output_pii_scan"):
         try:
@@ -373,34 +397,32 @@ async def generate_answer(
     try:
         ev = ctx.context._evaluator or container.evaluator
         context_texts = [item.chunk.text for item in context_items]
-        raw_q = (
-            pq.original_query if isinstance(pq, ProcessedQuery) else ctx.context.raw_query
-        )
-        report = ev.evaluate_online(
-            query=raw_q,
-            answer=result.answer,
-            context_texts=context_texts,
-        )
-        logger.info("Online evaluation complete",
-                    extra={"overall_score": report.overall_score,
-                           "scores": report.ragas_scores or report.custom_judge_scores})
+        raw_q = pq.original_query if isinstance(pq, ProcessedQuery) else ctx.context.raw_query
+        threading.Thread(
+            target=_run_online_eval_bg,
+            args=(ev, raw_q, result.answer, context_texts),
+            daemon=True,
+            name="ragas-online-eval",
+        ).start()
     except Exception as exc:
-        logger.warning("Online evaluation failed (non-fatal): %s", exc)
+        logger.warning("Online evaluation failed to start (non-fatal): %s", exc)
 
     logger.info(
         "generate_answer tool complete",
         extra={
-            "faithfulness":      result.faithfulness_score,
-            "citations":         len(result.citations),
-            "prompt_tokens":     result.prompt_tokens,
+            "faithfulness": result.faithfulness_score,
+            "citations": len(result.citations),
+            "prompt_tokens": result.prompt_tokens,
             "completion_tokens": result.completion_tokens,
-            "has_conflict":      result.has_conflict,
+            "has_conflict": result.has_conflict,
         },
     )
 
-    return json.dumps({
-        "answer":             result.answer,
-        "citations":          result.citations,   # full objects: number, chunk_id, source_name, ingestion_ts, excerpt
-        "faithfulness_score": result.faithfulness_score,
-        "has_conflict":       result.has_conflict,
-    })
+    return json.dumps(
+        {
+            "answer": result.answer,
+            "citations": result.citations,
+            "faithfulness_score": result.faithfulness_score,
+            "has_conflict": result.has_conflict,
+        }
+    )

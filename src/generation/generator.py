@@ -1,10 +1,9 @@
-
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any
 
 import openai
 
@@ -14,18 +13,21 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 @dataclass
 class GenerationResult:
     """The output of the generation stage, including the answer and provenance."""
+
     answer: str
-    citations: List[Dict[str, Any]] = field(default_factory=list)
-    sources: List[str] = field(default_factory=list)
-    faithfulness_score: Optional[float] = None
+    citations: list[dict[str, Any]] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+    faithfulness_score: float | None = None
     has_conflict: bool = False
-    conflict_resolution: Optional[str] = None
+    conflict_resolution: str | None = None
     model_used: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+
 
 class Generator:
     """
@@ -41,15 +43,14 @@ class Generator:
     def generate(
         self,
         query: str,
-        context_items: List[ContextItem],
+        context_items: list[ContextItem],
+        extra_instructions: list[str] | None = None,
     ) -> GenerationResult:
-        """
-        Generate a grounded answer from the query and retrieved context.
-        """
+        """Generate a grounded answer from the query and retrieved context."""
 
         has_conflict, conflict_note = self._detect_conflicts(context_items)
 
-        system_prompt = self._build_system_prompt()
+        system_prompt = self._build_system_prompt(extra_instructions=extra_instructions)
         user_prompt = self._build_user_prompt(query, context_items, conflict_note)
 
         model = self._gen_cfg["model"]
@@ -67,7 +68,7 @@ class Generator:
 
         answer_clean, citations = self._extract_citations(answer_raw, context_items)
 
-        faithfulness_score: Optional[float] = None
+        faithfulness_score: float | None = None
         if self._gen_cfg["faithfulness_check"]["enabled"]:
             faithfulness_score = self._check_faithfulness(
                 query=query,
@@ -78,7 +79,9 @@ class Generator:
         result = GenerationResult(
             answer=answer_clean,
             citations=citations,
-            sources=list({item.chunk.source_file for item in context_items if item.chunk.source_file}),
+            sources=list(
+                {item.chunk.source_file for item in context_items if item.chunk.source_file}
+            ),
             faithfulness_score=faithfulness_score,
             has_conflict=has_conflict,
             conflict_resolution=conflict_note,
@@ -98,12 +101,10 @@ class Generator:
         )
         return result
 
-    def _build_system_prompt(self) -> str:
-        """
-        System prompt enforcing grounded, citation-based generation.
-        """
+    def _build_system_prompt(self, extra_instructions: list[str] | None = None) -> str:
+        """System prompt enforcing grounded, citation-based generation."""
 
-        return (
+        base = (
             "You are a precise, grounded question-answering assistant.\n"
             "Rules you MUST follow:\n"
             "1. Answer ONLY using the provided context passages. Do NOT use prior knowledge.\n"
@@ -114,18 +115,23 @@ class Generator:
             "5. If context passages contradict each other, acknowledge the contradiction "
             "and present both perspectives with their source dates."
         )
+        if extra_instructions:
+            instructions_text = "\n".join(f"- {instr}" for instr in extra_instructions)
+            base += (
+                "\n\nAdditional user preferences (must be followed):\n"
+                + instructions_text
+            )
+        return base
 
     def _build_user_prompt(
         self,
         query: str,
-        context_items: List[ContextItem],
-        conflict_note: Optional[str],
+        context_items: list[ContextItem],
+        conflict_note: str | None,
     ) -> str:
-        """
-        Build the user prompt with numbered context passages and citation instructions.
-        """
+        """Build the user prompt with context passages and citation instructions."""
 
-        context_lines: List[str] = []
+        context_lines: list[str] = []
         for item in context_items:
             chunk = item.chunk
             header = (
@@ -140,17 +146,17 @@ class Generator:
         prompt = f"Context passages:\n\n{context_str}\n\n"
 
         if conflict_note:
-            prompt += f"Note: {conflict_note}\n\n"
+            prompt += (
+                "Note: The retrieved passages may contain contradictory information. "
+                "Identify any contradictions directly from the passages above "
+                "and cite only chunk_ids that appear in those passages.\n\n"
+            )
 
         prompt += f"Question: {query}\n\nAnswer (cite every claim with [CITE:chunk_id]):"
         return prompt
 
-    def _detect_conflicts(
-        self, context_items: List[ContextItem]
-    ) -> Tuple[bool, Optional[str]]:
-        """
-        Lightweight LLM-based conflict detection across retrieved chunks.
-        """
+    def _detect_conflicts(self, context_items: list[ContextItem]) -> tuple[bool, str | None]:
+        """Lightweight LLM-based conflict detection across retrieved chunks."""
         if not self._gen_cfg["conflict_handling"]["detect_conflicts"]:
             return False, None
 
@@ -167,7 +173,7 @@ class Generator:
         prompt = (
             "Do the following text passages contain contradictory information?\n\n"
             f"{excerpts_str}\n\n"
-            "Respond in JSON: {\"conflict\": true/false, \"description\": \"...\"}. "
+            'Respond in JSON: {"conflict": true/false, "description": "..."}. '
             "Return only valid JSON."
         )
         try:
@@ -191,50 +197,40 @@ class Generator:
     def _extract_citations(
         self,
         answer: str,
-        context_items: List[ContextItem],
-    ) -> Tuple[str, List[Dict[str, Any]]]:
-        """
-        Parse [CITE:chunk_id] markers from the answer and resolve them to source metadata.
-
-        The answer is returned with [CITE:chunk_id] markers replaced by short inline
-        references like [1], [2], … so citations are visible in the rendered text.
-        A deduplicated citations list (one entry per unique chunk_id, in order of first
-        appearance) is returned alongside so callers can render a reference list.
-        """
-        chunk_map: Dict[str, ContextItem] = {
-            item.chunk.chunk_id: item
-            for item in context_items
-            if item.chunk.chunk_id
+        context_items: list[ContextItem],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Parse [CITE:chunk_id] markers, replace with [N] references, and return the citations list."""
+        chunk_map: dict[str, ContextItem] = {
+            item.chunk.chunk_id: item for item in context_items if item.chunk.chunk_id
         }
 
-        citation_pattern = re.compile(r"\[CITE:([^\]]+)\]")  # Match [CITE:abc123] markers
+        citation_pattern = re.compile(r"\[CITE:([^\]]+)\]")
         found_ids = citation_pattern.findall(answer)
 
-        # Build ordered deduplication: first appearance order → citation number
-        seen: Dict[str, int] = {}
+        seen: dict[str, int] = {}
         for cid in found_ids:
             if cid not in seen:
                 seen[cid] = len(seen) + 1  # 1-indexed
 
-        # Replace each [CITE:chunk_id] with its short inline reference [N]
         def _replace(match: re.Match) -> str:
             cid = match.group(1)
             return f"[{seen.get(cid, '?')}]"
 
         inline_answer = citation_pattern.sub(_replace, answer).strip()
 
-        # Build the citations list in citation-number order
-        citations: List[Dict[str, Any]] = []
+        citations: list[dict[str, Any]] = []
         for cid, number in sorted(seen.items(), key=lambda x: x[1]):
             item = chunk_map.get(cid)
-            citations.append({
-                "number": number,
-                "chunk_id": cid,
-                "source_file": item.chunk.source_file if item else None,
-                "source_name": item.chunk.source_name if item else None,
-                "ingestion_ts": item.chunk.ingestion_ts if item else None,
-                "excerpt": item.chunk.text[:200] if item else None,
-            })
+            citations.append(
+                {
+                    "number": number,
+                    "chunk_id": cid,
+                    "source_file": item.chunk.source_file if item else None,
+                    "source_name": item.chunk.source_name if item else None,
+                    "ingestion_ts": item.chunk.ingestion_ts if item else None,
+                    "excerpt": item.chunk.text[:200] if item else None,
+                }
+            )
 
         return inline_answer, citations
 
@@ -242,11 +238,9 @@ class Generator:
         self,
         query: str,
         answer: str,
-        context_items: List[ContextItem],
+        context_items: list[ContextItem],
     ) -> float:
-        """
-        Route to the configured faithfulness method (ragas or selfcheckgpt).
-        """
+        """Route to the configured faithfulness method (ragas or selfcheckgpt)."""
 
         method = self._gen_cfg["faithfulness_check"]["method"]
 
@@ -255,12 +249,8 @@ class Generator:
         else:
             return self._ragas_faithfulness(answer, context_items)
 
-    def _ragas_faithfulness(
-        self, answer: str, context_items: List[ContextItem]
-    ) -> float:
-        """
-        Estimate faithfulness by extracting claims and verifying each against the context.
-        """
+    def _ragas_faithfulness(self, answer: str, context_items: list[ContextItem]) -> float:
+        """Estimate faithfulness by extracting claims and verifying each against the context."""
 
         context_str = "\n".join(item.chunk.text[:300] for item in context_items)
 
@@ -276,7 +266,7 @@ class Generator:
                 temperature=0.0,
                 max_tokens=300,
             )
-            claims: List[str] = json.loads(claims_resp.choices[0].message.content.strip())
+            claims: list[str] = json.loads(claims_resp.choices[0].message.content.strip())
         except Exception:
             return 0.5
 
@@ -304,32 +294,30 @@ class Generator:
                 pass
 
         score = grounded / len(claims)
-        logger.info(f"RAGAS faithfulness score: {score:.2f} ({grounded}/{len(claims)} claims grounded)")
+        logger.info(
+            f"RAGAS faithfulness score: {score:.2f} ({grounded}/{len(claims)} claims grounded)"
+        )
         return score
 
     def _selfcheck_gpt_faithfulness(
         self,
         query: str,
         answer: str,
-        context_items: List[ContextItem],
+        context_items: list[ContextItem],
     ) -> float:
-        """
-        SelfCheckGPT faithfulness via N stochastic samples. High variance → low faithfulness.
-        """
+        """SelfCheckGPT faithfulness via N stochastic samples; high variance → low faithfulness."""
 
         n_samples = self._gen_cfg["faithfulness_check"]["selfcheck_samples"]
         context_str = "\n".join(item.chunk.text[:200] for item in context_items)
 
-        samples: List[str] = []
+        samples: list[str] = []
         for _ in range(n_samples):
             resp = self._openai.chat.completions.create(
                 model=self._gen_cfg["model"],
                 messages=[
                     {
                         "role": "user",
-                        "content": (
-                            f"Context:\n{context_str}\n\nQuestion: {query}\n\nAnswer:"
-                        ),
+                        "content": (f"Context:\n{context_str}\n\nQuestion: {query}\n\nAnswer:"),
                     }
                 ],
                 temperature=1.0,
@@ -337,7 +325,7 @@ class Generator:
             )
             samples.append(resp.choices[0].message.content.strip())
 
-        consistencies: List[float] = []
+        consistencies: list[float] = []
         for sample in samples:
             agree_prompt = (
                 f"Original answer: {answer}\n\n"

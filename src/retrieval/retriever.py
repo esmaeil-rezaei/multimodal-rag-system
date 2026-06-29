@@ -1,18 +1,16 @@
-
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Tuple, Dict
 
+import cohere
 import numpy as np
 import openai
-import cohere
 from sentence_transformers import CrossEncoder
 
 from src.config.settings import get_config, get_secrets
 from src.indexing.vector_store import (
-    HybridSearchEngine,
     DenseVectorStore,
+    HybridSearchEngine,
     SearchResult,
 )
 from src.ingestion.parser import ParsedChunk
@@ -21,15 +19,18 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 class ContextItem:
     """
     A single piece of context to be passed to the generation stage.
     Carries the chunk, its final rank, and its source score.
     """
+
     def __init__(self, chunk: ParsedChunk, score: float, rank: int) -> None:
         self.chunk = chunk
         self.score = score
         self.rank = rank
+
 
 class Retriever:
     """
@@ -51,14 +52,14 @@ class Retriever:
         self._openai = openai.OpenAI(api_key=sec.openai_api_key)
         self._cohere = cohere.Client(sec.cohere_api_key)
 
-        self._cross_encoder: Optional[CrossEncoder] = None
+        self._cross_encoder: CrossEncoder | None = None
 
     def retrieve(
         self,
         pq: ProcessedQuery,
         query_vector: np.ndarray,
-        namespace: Optional[str] = None,
-    ) -> List[ContextItem]:
+        namespace: str | None = None,
+    ) -> list[ContextItem]:
         """
         Main retrieval flow for a query.
 
@@ -72,7 +73,7 @@ class Retriever:
         top_k_initial = self._ret_cfg["top_k_initial"]
         top_k_final = self._ret_cfg["top_k_final"]
 
-        raw_results: List[SearchResult] = self._search_engine.search(
+        raw_results: list[SearchResult] = self._search_engine.search(
             query=pq.final_query(),
             query_vector=query_vector,
             top_k=top_k_initial,
@@ -104,8 +105,8 @@ class Retriever:
         pq: ProcessedQuery,
         query_vector: np.ndarray,
         hyde_vector: np.ndarray,
-        namespace: Optional[str] = None,
-    ) -> List[ContextItem]:
+        namespace: str | None = None,
+    ) -> list[ContextItem]:
         """
         Same idea as normal retrieval, but we run it twice:
         once with the query, once with a HyDE-generated document.
@@ -113,8 +114,8 @@ class Retriever:
         Then we merge everything using RRF to improve recall.
         """
         top_k_initial = self._ret_cfg["top_k_initial"]
-        top_k_final   = self._ret_cfg["top_k_final"]
-        rrf_k         = 60
+        top_k_final = self._ret_cfg["top_k_final"]
+        rrf_k = 60
 
         results_query = self._search_engine.search(
             query=pq.final_query(),
@@ -146,11 +147,11 @@ class Retriever:
             chunk_map.setdefault(cid, result)
 
         sorted_cids = sorted(scores, key=lambda c: scores[c], reverse=True)[:top_k_initial]
-        raw_results: List[SearchResult] = []
+        raw_results: list[SearchResult] = []
         for rank, cid in enumerate(sorted_cids, start=1):
             r = chunk_map[cid]
             r.score = scores[cid]
-            r.rank  = rank
+            r.rank = rank
             r.retrieval_method = "hyde_dual"
             raw_results.append(r)
 
@@ -167,7 +168,7 @@ class Retriever:
             raw_results = self._rerank(pq.final_query(), raw_results)
 
         raw_results = raw_results[:top_k_final]
-        ordered     = self._apply_position_aware_ordering(raw_results)
+        ordered = self._apply_position_aware_ordering(raw_results)
         context_items = self._manage_context(ordered, pq.final_query())
 
         logger.info(f"Final context (dual): {len(context_items)} items")
@@ -177,10 +178,10 @@ class Retriever:
         self,
         pq: ProcessedQuery,
         query_vector: np.ndarray,
-        sub_vectors: List[Tuple[str, np.ndarray]],
-        hyde_vector: Optional[np.ndarray] = None,
-        namespace: Optional[str] = None,
-    ) -> List[ContextItem]:
+        sub_vectors: list[tuple[str, np.ndarray]],
+        hyde_vector: np.ndarray | None = None,
+        namespace: str | None = None,
+    ) -> list[ContextItem]:
         """
         Multi-query retrieval: runs one search per sub-question (in parallel),
         plus the main query (and optionally HyDE), then merges everything
@@ -197,17 +198,17 @@ class Retriever:
             Deduplicated, reranked, context-managed list of ContextItems.
         """
         top_k_initial = self._ret_cfg["top_k_initial"]
-        top_k_final   = self._ret_cfg["top_k_final"]
-        rrf_k         = 60
+        top_k_final = self._ret_cfg["top_k_final"]
+        rrf_k = 60
 
-        search_pairs: List[Tuple[str, np.ndarray]] = [
+        search_pairs: list[tuple[str, np.ndarray]] = [
             (pq.final_query(), query_vector),
         ]
         if hyde_vector is not None:
             search_pairs.append((pq.hypothetical_doc or pq.final_query(), hyde_vector))
         search_pairs.extend(sub_vectors)
 
-        all_result_lists: List[List[SearchResult]] = []
+        all_result_lists: list[list[SearchResult]] = []
         for query_text, vector in search_pairs:
             try:
                 results = self._search_engine.search(
@@ -225,8 +226,8 @@ class Retriever:
             logger.warning("All sub-query searches failed — returning empty context")
             return []
 
-        scores: Dict[str, float] = {}
-        chunk_map: Dict[str, SearchResult] = {}
+        scores: dict[str, float] = {}
+        chunk_map: dict[str, SearchResult] = {}
 
         for result_list in all_result_lists:
             for rank, result in enumerate(result_list, start=1):
@@ -235,16 +236,16 @@ class Retriever:
                 chunk_map.setdefault(cid, result)
 
         sorted_cids = sorted(scores, key=lambda c: scores[c], reverse=True)[:top_k_initial]
-        raw_results: List[SearchResult] = []
+        raw_results: list[SearchResult] = []
         for rank, cid in enumerate(sorted_cids, start=1):
             r = chunk_map[cid]
             r.score = scores[cid]
-            r.rank  = rank
+            r.rank = rank
             r.retrieval_method = "multi_query"
             raw_results.append(r)
 
         n_queries = len(search_pairs)
-        n_sub     = len(sub_vectors)
+        n_sub = len(sub_vectors)
         logger.info(
             "Multi-query retrieval merged: %d queries (%d sub-questions%s) → %d unique candidates",
             n_queries,
@@ -260,19 +261,19 @@ class Retriever:
         if self._ret_cfg["reranking"]["enabled"]:
             raw_results = self._rerank(pq.final_query(), raw_results)
 
-        raw_results   = raw_results[:top_k_final]
-        ordered       = self._apply_position_aware_ordering(raw_results)
+        raw_results = raw_results[:top_k_final]
+        ordered = self._apply_position_aware_ordering(raw_results)
         context_items = self._manage_context(ordered, pq.final_query())
 
         logger.info("Final context (multi-query): %d items", len(context_items))
         return context_items
 
-    def _expand_to_parents(self, results: List[SearchResult]) -> List[SearchResult]:
+    def _expand_to_parents(self, results: list[SearchResult]) -> list[SearchResult]:
         """
         Replace paragraph-level hits with their parent section for richer context.
         Section and document nodes are returned as-is — already broad enough.
         """
-        expanded: List[SearchResult] = []
+        expanded: list[SearchResult] = []
         seen_parent_ids = set()
 
         for result in results:
@@ -299,7 +300,7 @@ class Retriever:
             expanded.append(result)
         return expanded
 
-    def _fetch_chunk_by_id(self, chunk_id: str) -> Optional[ParsedChunk]:
+    def _fetch_chunk_by_id(self, chunk_id: str) -> ParsedChunk | None:
         """
         Pull a chunk directly from the vector DB by ID.
         Mostly used for resolving parent chunks.
@@ -327,21 +328,18 @@ class Retriever:
             logger.warning(f"Parent fetch failed for {chunk_id}: {exc}")
             return None
 
-    def _expand_sentence_window(self, results: List[SearchResult]) -> List[SearchResult]:
+    def _expand_sentence_window(self, results: list[SearchResult]) -> list[SearchResult]:
         """
         Adds surrounding text around a match if it's available.
         Helps the model see a bit more context than just the hit.
         """
-        window = self._ret_cfg["sentence_window"]["window_size"]
         for result in results:
             surrounding = result.chunk.metadata.get("surrounding_text")
             if surrounding:
                 result.chunk.text = surrounding
         return results
 
-    def _rerank(
-        self, query: str, results: List[SearchResult]
-    ) -> List[SearchResult]:
+    def _rerank(self, query: str, results: list[SearchResult]) -> list[SearchResult]:
         """
         Reorders retrieved chunks based on relevance.
         Supports different rerankers (Cohere, cross-encoder, or LLM).
@@ -363,8 +361,8 @@ class Retriever:
             return results
 
     def _rerank_cohere(
-        self, query: str, documents: List[str], results: List[SearchResult]
-    ) -> List[SearchResult]:
+        self, query: str, documents: list[str], results: list[SearchResult]
+    ) -> list[SearchResult]:
         """Re-rank using the Cohere cross-encoder reranker API."""
         model = self._ret_cfg["reranking"]["cohere_model"]
         response = self._cohere.rerank(
@@ -374,7 +372,7 @@ class Retriever:
             top_n=len(documents),
         )
 
-        reranked: List[SearchResult] = []
+        reranked: list[SearchResult] = []
         for i, rerank_result in enumerate(response.results):
             original = results[rerank_result.index]
             original.score = rerank_result.relevance_score
@@ -383,15 +381,15 @@ class Retriever:
         return reranked
 
     def _rerank_cross_encoder(
-        self, query: str, documents: List[str], results: List[SearchResult]
-    ) -> List[SearchResult]:
+        self, query: str, documents: list[str], results: list[SearchResult]
+    ) -> list[SearchResult]:
         """Re-rank using a local BGE cross-encoder model."""
         if self._cross_encoder is None:
             model_name = self._ret_cfg["reranking"]["bge_model"]
             self._cross_encoder = CrossEncoder(model_name)
         pairs = [(query, doc) for doc in documents]
         scores = self._cross_encoder.predict(pairs)
-        for result, score in zip(results, scores):
+        for result, score in zip(results, scores, strict=False):
             result.score = float(score)
         results.sort(key=lambda r: r.score, reverse=True)
         for rank, result in enumerate(results, start=1):
@@ -399,16 +397,14 @@ class Retriever:
         return results
 
     def _rerank_llm(
-        self, query: str, documents: List[str], results: List[SearchResult]
-    ) -> List[SearchResult]:
+        self, query: str, documents: list[str], results: list[SearchResult]
+    ) -> list[SearchResult]:
         """
         Uses an LLM to rank documents.
         Slower, but usually gives better ordering.
         """
         model = self._ret_cfg["reranking"]["llm_rerank_model"]
-        doc_list_str = "\n".join(
-            f"[{i+1}] {doc[:500]}" for i, doc in enumerate(documents)
-        )
+        doc_list_str = "\n".join(f"[{i+1}] {doc[:500]}" for i, doc in enumerate(documents))
         prompt = (
             f"Query: {query}\n\n"
             f"Documents:\n{doc_list_str}\n\n"
@@ -436,9 +432,7 @@ class Retriever:
             logger.warning("LLM reranker returned unparseable output — using original order")
             return results
 
-    def _apply_position_aware_ordering(
-        self, results: List[SearchResult]
-    ) -> List[SearchResult]:
+    def _apply_position_aware_ordering(self, results: list[SearchResult]) -> list[SearchResult]:
         """
         Reorders results to reduce the "lost in the middle" issue.
         Important chunks go to the edges, weaker ones in the middle.
@@ -463,9 +457,7 @@ class Retriever:
         logger.debug(f"Position-aware ordering applied to {len(ordered)} chunks")
         return ordered
 
-    def _manage_context(
-        self, results: List[SearchResult], query: str
-    ) -> List[ContextItem]:
+    def _manage_context(self, results: list[SearchResult], query: str) -> list[ContextItem]:
         """
         Ensure the total context fits within the model's context window.
         Applies compression if necessary.
@@ -473,7 +465,7 @@ class Retriever:
         max_tokens = self._ctx_cfg["max_context_tokens"]
         strategy = self._ctx_cfg["compression_model"]
 
-        context_items: List[ContextItem] = []
+        context_items: list[ContextItem] = []
         total_tokens = 0
 
         for rank, result in enumerate(results, start=1):

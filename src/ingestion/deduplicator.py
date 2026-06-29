@@ -1,8 +1,6 @@
-
 from __future__ import annotations
 
 import hashlib
-from typing import Dict, List, Set
 
 from datasketch import MinHash, MinHashLSH
 
@@ -11,6 +9,7 @@ from src.ingestion.parser import ParsedChunk
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
 
 class Deduplicator:
     """
@@ -25,22 +24,22 @@ class Deduplicator:
         self._threshold: float = self._dedup_cfg["jaccard_threshold"]
         self._keep_strategy: str = self._dedup_cfg["keep_strategy"]
 
-        self._exact_hashes: Set[str] = set()
+        self._exact_hashes: set[str] = set()
 
         self._lsh = MinHashLSH(
             threshold=self._threshold,
             num_perm=self._num_perm,
         )
-        self._lsh_registry: Dict[str, tuple[ParsedChunk, MinHash]] = {}
+        self._lsh_registry: dict[str, tuple[ParsedChunk, MinHash]] = {}
 
-    def filter(self, chunks: List[ParsedChunk]) -> List[ParsedChunk]:
+    def filter(self, chunks: list[ParsedChunk]) -> list[ParsedChunk]:
         """
         Deduplicate a batch of chunks using exact and MinHash matching.
         """
         if not self._dedup_cfg["enabled"]:
             return chunks
 
-        unique: List[ParsedChunk] = []
+        unique: list[ParsedChunk] = []
         duplicates_exact = 0
         duplicates_fuzzy = 0
 
@@ -54,7 +53,7 @@ class Deduplicator:
                 continue
 
             minhash = self._compute_minhash(norm_text)
-            similar_keys: List[str] = self._lsh.query(minhash)
+            similar_keys: list[str] = self._lsh.query(minhash)
 
             if similar_keys:
                 winner = self._resolve_conflict(chunk, similar_keys)
@@ -101,24 +100,18 @@ class Deduplicator:
         return mh
 
     @staticmethod
-    def _shingle(text: str, k: int = 3) -> Set[str]:
+    def _shingle(text: str, k: int = 3) -> set[str]:
         """
         Character k-grams for robust near-duplicate matching.
         """
         text = " ".join(text.lower().split())
         return {text[i : i + k] for i in range(len(text) - k + 1)}
 
-    def _resolve_conflict(
-        self, incoming: ParsedChunk, existing_keys: List[str]
-    ) -> ParsedChunk:
+    def _resolve_conflict(self, incoming: ParsedChunk, existing_keys: list[str]) -> ParsedChunk:
         """
         Select canonical chunk among near-duplicates.
         """
-        existing_chunks = [
-            self._lsh_registry[k]
-            for k in existing_keys
-            if k in self._lsh_registry
-        ]
+        existing_chunks = [self._lsh_registry[k] for k in existing_keys if k in self._lsh_registry]
         if not existing_chunks:
             return incoming
 
