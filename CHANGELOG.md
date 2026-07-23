@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-23
+
+### Added
+
+- LLM-based intent routing: `_classify_routing_intent` in `QueryUnderstanding`
+  replaced keyword/heuristic lists with a `gpt-4o-mini` call (`max_tokens=5`,
+  temperature 0). Routes to `conversational`, `followup`, or `retrieval` with
+  full conversation-history context. Falls back to `retrieval` on error.
+- Direct followup streaming path: followup queries bypass the Agents SDK and
+  stream directly from conversation history. Buffers the first 16 chars to
+  detect a `NEEDS_RETRIEVAL` signal before yielding tokens; falls through to
+  the retrieval pipeline when history is insufficient.
+- Direct conversational path: social/greeting queries bypass retrieval entirely
+  and stream a short `gpt-4o-mini` reply with conversation-history context.
+- `agent_name` field in SSE `done` events; the UI badge now shows `RAG Agent`,
+  `Follow-up Agent`, or `Assistant` instead of the internal model string.
+- `src/utils/retry.py`: `openai_retry` tenacity decorator (3 attempts,
+  exponential backoff 1–8 s) for `RateLimitError`, `APITimeoutError`,
+  `APIConnectionError`, and `InternalServerError`. Applied to `generate()`,
+  `_detect_conflicts()`, `_ragas_faithfulness()`, `_selfcheck_gpt_faithfulness()`,
+  and the streaming create helper `_async_create_stream()`.
+- `httpx.Timeout` on all OpenAI client instantiations (connect 5 s, read 60 s
+  for generation / 30 s elsewhere) and the Cohere client; `max_retries=0`
+  hands retry control to tenacity.
+- `GET /ready` readiness probe: checks Qdrant and Redis; returns `200` when
+  both are available, `503` with a per-service breakdown otherwise.
+
+### Changed
+
+- Routing classification, history compression, and preference detection now run
+  concurrently via `asyncio.gather` in both `run()` and `run_stream()`.
+- `model_used` in `done` SSE events now carries the actual model identifier
+  instead of internal routing labels (`direct_conversational`, `no-context`,
+  `guardrail`).
+
 ## [1.1.0] - 2026-06-28
 
 ### Added

@@ -11,7 +11,7 @@ from pathlib import Path
 import jwt
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -26,6 +26,7 @@ from app.auth import (
 from src.config.settings import get_config
 from src.core.container import get_container, init_container
 from src.indexing.vector_store import DenseVectorStore
+
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +285,72 @@ async def run_query(req: QueryRequest):
     )
 
 
+@app.post("/query/stream", summary="Run a RAG query with server-sent event streaming")
+async def run_query_stream(req: QueryRequest):
+    """
+    Streaming endpoint that yields SSE events as the query is processed.
+
+    Event types:
+      {"event": "status",  "message": "..."}   — phase updates (immediate feedback)
+      {"event": "token",   "content": "..."}   — answer text tokens (streamed as generated)
+      {"event": "done",    "citations": [...], "faithfulness_score": ..., ...}
+      {"event": "error",   "message": "..."}   — on failure
+
+    Connect with EventSource in the browser or `curl -N /query/stream`.
+    The existing blocking /query endpoint is unchanged.
+    """
+    session_id = req.session_id or "default"
+    history = _get_history(session_id)
+    orchestrator = get_container().orchestrator
+
+    namespace: str | None = None
+    if req.token:
+        try:
+            claims = decode_token(req.token)
+            namespace = claims.get("namespace")
+        except jwt.PyJWTError as exc:
+            logger.warning("Invalid JWT in stream request: %s", exc)
+
+    if namespace is None and req.namespace:
+        namespace = req.namespace
+
+    async def event_stream():
+        token_buf: list[str] = []
+        try:
+            async for chunk in orchestrator.run_stream(
+                raw_query=req.question,
+                conversation_history=history,
+                namespace=namespace,
+            ):
+                # Collect tokens so we can update conversation history after streaming
+                try:
+                    raw = chunk.removeprefix("data: ").strip()
+                    data = json.loads(raw)
+                    if data.get("event") == "token":
+                        token_buf.append(data.get("content", ""))
+                except Exception:
+                    pass
+                yield chunk
+        except Exception as exc:
+            logger.error("Streaming error for query '%s': %s", req.question[:80], exc)
+            yield f"data: {json.dumps({'event': 'error', 'message': 'An error occurred.'})}\n\n"
+
+        # Update conversation history once the stream is complete
+        full_answer = "".join(token_buf).strip()
+        if full_answer and not _is_could_not_answer(full_answer, None):
+            _append_history(session_id, req.question, full_answer)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @app.post("/feedback", summary="Submit thumbs-up / thumbs-down feedback")
 async def submit_feedback(req: FeedbackRequest):
     ts = datetime.now(timezone.utc).isoformat()
@@ -314,6 +381,40 @@ async def clear_session(session_id: str):
 @app.get("/health", summary="Liveness probe")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/ready", summary="Readiness probe")
+async def ready():
+    import redis as _redis_mod
+
+    from src.config.settings import get_secrets as _get_secrets
+
+    checks: dict[str, str] = {}
+    healthy = True
+
+    try:
+        container = get_container()
+        container.dense_store._client.get_collections()
+        checks["qdrant"] = "ok"
+    except Exception as exc:
+        checks["qdrant"] = f"error: {exc}"
+        healthy = False
+
+    try:
+        _r = _redis_mod.from_url(_get_secrets().redis_url, socket_connect_timeout=2)
+        _r.ping()
+        checks["redis"] = "ok"
+    except Exception as exc:
+        checks["redis"] = f"error: {exc}"
+        healthy = False
+
+    if not healthy:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "not ready", "checks": checks},
+        )
+
+    return {"status": "ready", "checks": checks}
 
 
 @app.get("/logs/summary", summary="Feedback log line counts")

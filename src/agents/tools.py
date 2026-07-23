@@ -146,24 +146,34 @@ async def retrieve_context(
 
     with TraceSpan("query_embedding"):
         try:
-            query_vector: np.ndarray = embedder.embed_query(pq.final_query(), language=pq.language)
+            # Build an ordered text list and embed in one batched forward pass.
+            # embed_batch() is substantially faster than N sequential embed_query()
+            # calls or a ThreadPoolExecutor fan-out because the model processes all
+            # texts together, filling its batch dimension properly.
+            _sq_texts: list[str] = [
+                sq if isinstance(sq, str) else str(sq) for sq in pq.sub_questions
+            ]
+            _has_hyde = pq.hypothetical_doc is not None
+            _all_texts: list[str] = [pq.final_query()]
+            if _has_hyde:
+                _all_texts.append(pq.hypothetical_doc)  # type: ignore[arg-type]
+            _sq_start = len(_all_texts)
+            _all_texts.extend(_sq_texts)
+
+            _vectors = embedder.embed_batch(_all_texts, language=pq.language)
+            query_vector: np.ndarray = _vectors[0]
 
             hyde_vector: np.ndarray | None = None
-            if pq.hypothetical_doc is not None:
-                hyde_vector = embedder.embed_query(pq.hypothetical_doc, language=pq.language)
+            if _has_hyde:
+                hyde_vector = _vectors[1]
                 logger.info(
                     "HyDE vector generated — dual retrieval will be used",
-                    extra={"hyde_preview": pq.hypothetical_doc[:120]},
+                    extra={"hyde_preview": pq.hypothetical_doc[:120]},  # type: ignore[index]
                 )
 
-            sub_vectors = []
-            for sq in pq.sub_questions:
-                try:
-                    sv = embedder.embed_query(sq, language=pq.language)
-                    sub_vectors.append((sq, sv))
-                except Exception as exc:
-                    logger.warning("Sub-question embedding failed for '%s': %s", sq[:60], exc)
-
+            sub_vectors: list[tuple[str, np.ndarray]] = [
+                (_sq, _vectors[_sq_start + _i]) for _i, _sq in enumerate(_sq_texts)
+            ]
             if sub_vectors:
                 logger.info(
                     "Sub-question vectors generated: %d / %d",
@@ -319,6 +329,18 @@ async def generate_answer(
     ctx: RunContextWrapper[RAGRunContext],
 ) -> str:
     """Generate a grounded answer from retrieved context."""
+    # Streaming mode: defer generation to the orchestrator's run_stream()
+    if getattr(ctx.context, "stream_mode", False):
+        ctx.context.record("generate_answer_tool", "deferred (stream_mode)")
+        return json.dumps(
+            {
+                "answer": "__STREAMING__",
+                "citations": [],
+                "faithfulness_score": None,
+                "has_conflict": False,
+            }
+        )
+
     pq = ctx.context.processed_query
     context_items = ctx.context.context_items
 

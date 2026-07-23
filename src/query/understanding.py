@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 import openai
 import spacy
 from langdetect import detect as _langdetect
@@ -45,7 +47,11 @@ class QueryUnderstanding:
         cfg = get_config()
         sec = get_secrets()
         self._q_cfg = cfg.query
-        self._openai = openai.OpenAI(api_key=sec.openai_api_key)
+        self._openai = openai.OpenAI(
+            api_key=sec.openai_api_key,
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+            max_retries=0,
+        )
 
         self._nlp: spacy.Language | None = None
         if self._q_cfg["entity_recognition"]["enabled"]:
@@ -77,16 +83,45 @@ class QueryUnderstanding:
 
         working_query = pq.standalone_query
 
-        if self._q_cfg["expansion"]["enabled"]:
-            pq.expanded_query, pq.hypothetical_doc = self._expand_query(working_query)
+        # Fan-out independent LLM calls (HyDE expansion, sub-question decomposition,
+        # NER entity filters) in parallel — saves ~1–1.5 s vs sequential.
+        expand_enabled = self._q_cfg["expansion"]["enabled"]
+
+        # HyDE generates a hypothetical document to improve retrieval for longer,
+        # nuanced queries.  For very short queries (< 5 words) the signal is too
+        # sparse for expansion to help, so skip it to save ~1–1.5 s.
+        if expand_enabled and len(working_query.split()) < 5:
+            expand_enabled = False
+            logger.debug(
+                "HyDE skipped: query too short (%d words)", len(working_query.split())
+            )
+
+        decomp_enabled = self._q_cfg["decomposition"]["enabled"]
+        ner_enabled    = self._q_cfg["entity_recognition"]["enabled"]
+        n_workers = sum([expand_enabled, decomp_enabled, ner_enabled])
+
+        if n_workers > 0:
+            with ThreadPoolExecutor(max_workers=n_workers) as _pool:
+                _futs: dict[str, Any] = {}
+                if expand_enabled:
+                    _futs["expand"]   = _pool.submit(self._expand_query,   working_query)
+                if decomp_enabled:
+                    _futs["decompose"] = _pool.submit(self._decompose_query, working_query)
+                if ner_enabled:
+                    _futs["ner"]      = _pool.submit(self._extract_filters, working_query)
+
+                if "expand" in _futs:
+                    pq.expanded_query, pq.hypothetical_doc = _futs["expand"].result()
+                else:
+                    pq.expanded_query = working_query
+
+                if "decompose" in _futs:
+                    pq.sub_questions = _futs["decompose"].result()
+
+                if "ner" in _futs:
+                    pq.metadata_filters = _futs["ner"].result()
         else:
             pq.expanded_query = working_query
-
-        if self._q_cfg["decomposition"]["enabled"]:
-            pq.sub_questions = self._decompose_query(working_query)
-
-        if self._q_cfg["entity_recognition"]["enabled"]:
-            pq.metadata_filters = self._extract_filters(working_query)
 
         try:
             pq.language = _langdetect(query)
@@ -305,119 +340,70 @@ class QueryUnderstanding:
         ctx_history: list[dict[str, str]],
     ) -> str:
         """
-        Classify query intent: "conversational", "followup", or "retrieval".
-        Keyword-based, no LLM call.
+        LLM-based routing classifier.
+
+        Uses the model configured under ``query.intent_routing.model``
+        (default: gpt-4o-mini) with ``max_tokens=5`` — extremely cheap and fast.
+        This method is designed to be called via ``asyncio.to_thread`` from the
+        orchestrator so it runs concurrently with history compression and preference
+        detection, adding zero wall-clock latency.
+
+        Returns one of: ``'conversational'``, ``'followup'``, ``'retrieval'``.
         """
-        q = query.strip().lower()
-
-        CONVERSATIONAL_EXACT = {
-            "hi",
-            "hello",
-            "hey",
-            "ok",
-            "okay",
-            "thanks",
-            "thank you",
-            "cool",
-            "great",
-            "nice",
-            "sure",
-            "interesting",
-            "got it",
-            "i see",
-            "makes sense",
-            "sounds good",
-            "no problem",
-        }
-        CONVERSATIONAL_PREFIXES = (
-            "how are you",
-            "what's up",
-            "who are you",
-            "are you an ai",
-        )
-        if q in CONVERSATIONAL_EXACT:
-            return "conversational"
-        if any(q.startswith(p) for p in CONVERSATIONAL_PREFIXES):
+        q = query.strip()
+        if not q:
             return "conversational"
 
-        # Phrases that signal a follow-up regardless of whether history exists
-        FOLLOWUP_ALWAYS = (
-            "you just",
-            "you said",
-            "you mentioned",
-            "i meant",
-            "tell me more",
-            "expand on",
-            "elaborate",
-            "clarify",
-            "explain more",
-            "what do you mean",
-            "can you explain",
-            "more detail",
-            "in more detail",
-            "the one you",
-            "that algorithm",
-            "this algorithm",
-            "the algo",
-            "those methods",
-            "these methods",
-            "the methods",
-            "the components",
-            "that you",
-            "this approach",
-            "the approach",
+        routing_cfg = self._q_cfg.get("intent_routing", {})
+        model: str = routing_cfg.get("model", "gpt-4o-mini")
+
+        # Provide the last few turns so the model can correctly classify
+        # follow-up messages that rely on prior context.
+        history_excerpt = "\n".join(
+            f"{m['role'].upper()}: {m['content'][:150]}"
+            for m in (ctx_history or [])[-4:]
+            if m.get("role") in ("user", "assistant")
         )
-        if any(phrase in q for phrase in FOLLOWUP_ALWAYS):
-            return "followup"
 
-        # Phrases that only signal a follow-up when there IS prior conversation
-        FOLLOWUP_WITH_HISTORY = (
-            "summarize it",
-            "summarize the last",
-            "summarize that",
-            "summarize your last",
-            "the last answer",
-            "the last response",
-            "the previous answer",
-            "the previous response",
-            "what you just said",
-            "what did you say",
-            "you just said",
-            "repeat that",
-            "say that again",
-            "what about",
+        system = (
+            "Classify the user's message into exactly one routing intent.\n\n"
+            "• conversational — a social or casual message that requires no knowledge-base "
+            "lookup: greetings, small talk, one-word reactions, acknowledgments, or questions "
+            "about the assistant itself (e.g. 'hi', 'thanks', 'interesting', 'ok', "
+            "'good morning', 'how are you', 'who are you').\n"
+            "• followup — the message explicitly references something already discussed in "
+            "the conversation and asks to elaborate, clarify, or summarise it "
+            "(e.g. 'tell me more', 'expand on that', 'what did you mean by X', 'elaborate').\n"
+            "• retrieval — a factual question or domain topic that requires searching a "
+            "knowledge base (e.g. 'Alzheimer disease', 'what is HER2?', 'CT scan protocols', "
+            "'why does amyloid accumulate?').\n\n"
+            "Reply with exactly one word: conversational, followup, or retrieval."
         )
-        if ctx_history and any(phrase in q for phrase in FOLLOWUP_WITH_HISTORY):
-            return "followup"
 
-        PRONOUNS = {"it", "its", "they", "their", "this", "that", "these", "those", "them"}
-        SUMMARY_VERBS = {"summarize", "summarise", "recap", "rephrase", "restate", "expand"}
-        if ctx_history:
-            tokens = set(q.split())
-            if tokens & PRONOUNS and len(q.split()) <= 10:
-                return "followup"
-            if tokens & SUMMARY_VERBS:
-                return "followup"
+        user_msg = f"Message: {q}"
+        if history_excerpt:
+            user_msg = f"Recent conversation:\n{history_excerpt}\n\nMessage: {q}"
 
-        if len(q.split()) <= 4 and not any(
-            kw in q
-            for kw in [
-                "what",
-                "who",
-                "why",
-                "how",
-                "when",
-                "where",
-                "which",
-                "is",
-                "are",
-                "does",
-                "do",
-            ]
-        ):
-            return "conversational"
-
-        return "retrieval"
+        try:
+            resp = self._openai.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.0,
+                max_tokens=5,
+            )
+            raw = (resp.choices[0].message.content or "retrieval").strip().lower()
+            for label in ("conversational", "followup", "retrieval"):
+                if label in raw:
+                    logger.debug("Routing intent for %r → %s", q[:60], label)
+                    return label
+            logger.warning("Unexpected routing label %r for query %r; defaulting to retrieval.", raw, q[:60])
+            return "retrieval"
+        except Exception as exc:
+            logger.warning("Routing LLM call failed (%s); defaulting to retrieval.", exc)
+            return "retrieval"
 
     def _decompose_query(self, query: str) -> list[str]:
         """

@@ -23,6 +23,7 @@ class RAGRunContext:
     agent_trace: list[str] = field(default_factory=list)
     user_preferences: list[str] = field(default_factory=list)
     container: AppContainer | None = field(default=None, repr=False)
+    stream_mode: bool = False   # if True, generate_answer tool defers generation to orchestrator
     _query_vector: Any | None = field(default=None, repr=False)
     _evaluator: Any | None = field(default=None, repr=False)
 

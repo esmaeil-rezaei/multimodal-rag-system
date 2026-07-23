@@ -122,7 +122,7 @@ multimodal-rag-system/
 │   ├── operations/          # ops_middleware.py — PII, semantic cache, tracing, ACL
 │   ├── query/               # understanding.py, pipeline.py
 │   ├── retrieval/           # retriever.py — hybrid search, RRF, reranking, context management
-│   └── utils/               # logger.py, file_utils.py
+│   └── utils/               # logger.py, file_utils.py, retry.py
 ├── scripts/
 │   ├── ingest.py            # CLI ingestion runner
 │   ├── query.py             # CLI query runner
@@ -229,6 +229,7 @@ Open `http://localhost:8000` for the browser UI, or use the API directly.
 | `POST` | `/feedback` | Submit thumbs-up / thumbs-down feedback |
 | `DELETE` | `/session/{session_id}` | Clear conversation history |
 | `GET` | `/health` | Liveness probe |
+| `GET` | `/ready` | Readiness probe (checks Qdrant + Redis) |
 | `GET` | `/logs/summary` | Feedback log line counts |
 
 ### Query request

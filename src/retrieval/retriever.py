@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 import cohere
+import httpx
 import numpy as np
 import openai
 from sentence_transformers import CrossEncoder
@@ -49,8 +50,9 @@ class Retriever:
         sec = get_secrets()
         self._ret_cfg = cfg.retrieval
         self._ctx_cfg = cfg.retrieval["context_management"]
-        self._openai = openai.OpenAI(api_key=sec.openai_api_key)
-        self._cohere = cohere.Client(sec.cohere_api_key)
+        _timeout = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+        self._openai = openai.OpenAI(api_key=sec.openai_api_key, timeout=_timeout, max_retries=0)
+        self._cohere = cohere.Client(sec.cohere_api_key, timeout=30)
 
         self._cross_encoder: CrossEncoder | None = None
 

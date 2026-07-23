@@ -76,16 +76,16 @@ chunking:
 # Embedding Models
 embeddings:
   backend: "sentence_transformers"             # embedding backend: openai | sentence_transformers
-  default_model: "BAAI/bge-large-en-v1.5"       # default embedding model
+  default_model: "BAAI/bge-small-en-v1.5"       # default embedding model (384-dim, ~3× faster than bge-large)
   domain_models:                                # domain-specific overrides
-    legal: "BAAI/bge-large-en-v1.5"
+    legal: "BAAI/bge-small-en-v1.5"
     medical: "pritamdeka/S-PubMedBert-MS-MARCO"
     financial: "BAAI/bge-large-en-v1.5"
 
   multilingual_model: "intfloat/multilingual-e5-large"  # multilingual fallback
   language_detection: true                              # enable language detection
   cross_lingual_strategy: "retrieve_then_translate"     # cross-lingual mode
-  embedding_dimensions: 1024                            # vector dimension
+  embedding_dimensions: 384                             # vector dimension (bge-small-en-v1.5)
   batch_size: 64                                        # embedding batch size
 
 # Vector Index
@@ -118,7 +118,7 @@ query:
   expansion:
     enabled: true                               # query expansion toggle
     method: "hyde"                              # expansion method: hyde | query2doc | prf
-    hyde_model: "gpt-4-turbo"                   # generation model
+    hyde_model: "gpt-4o-mini"                   # generation model
     hyde_max_tokens: 256                        # max expansion length
     prf_top_k: 3                                # feedback docs
 
@@ -131,7 +131,7 @@ query:
   conversation:
     enabled: true                               # conversation mode
     history_window: 6                           # active turns kept verbatim
-    condense_model: "gpt-4-turbo"               # query rewrite model
+    condense_model: "gpt-4o-mini"               # query rewrite model
     compress_history: true                      # summarise turns that fall outside the window
     compress_threshold: 14                      # summarise when history exceeds this many turns
     compress_model: "gpt-4o-mini"               # cheap model for summarisation
@@ -145,12 +145,12 @@ query:
 
   intent_routing:
     enabled: true
-    model: "gpt-4o"
+    model: "gpt-4o-mini"
     min_confidence_to_skip: 0.80
 
   agents:
-    orchestrator_model: "gpt-4o"
-    worker_model: "gpt-4o"
+    orchestrator_model: "gpt-4o-mini"
+    worker_model: "gpt-4o-mini"
     max_turns: 15
 
   guardrails:
@@ -194,7 +194,8 @@ retrieval:
 
 # Generation & Faithfulness
 generation:
-  model: "gpt-4-turbo"                          # generation model
+  model: "gpt-4o"                               # generation model (used when context_items > 2)
+  fast_model: "gpt-4o-mini"                     # cheaper model for sparse context (≤ 2 items)
   temperature: 0.0                              # deterministic output
   max_tokens: 1024                              # response length limit
   grounded_prompting: true                      # enforce grounding
@@ -337,7 +338,7 @@ graphrag:
     local_hop_depth: 2                         # K-hop neighbourhood depth
     community_top_k: 5                         # Community summaries to retrieve
     max_entity_source_chunks: 10               # Max source chunks per entity
-    rrf_k: 60                                  # RRF smoothing constant
+    rrf_k: 5                                   # RRF smoothing constant
   
   entity_types:
     # Disease & Clinical Presentation

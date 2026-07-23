@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from src.agents.orchestrator import RAGOrchestrator
@@ -13,6 +15,7 @@ from src.indexing.vector_store import DenseVectorStore, HybridSearchEngine, Spar
 from src.operations.ops_middleware import AccessControlMiddleware, PIIGuard
 from src.query.understanding import QueryUnderstanding
 from src.retrieval.retriever import Retriever
+from src.utils.logger import get_logger
 
 try:
     from src.graphrag.graph_retriever import GraphRetriever
@@ -24,7 +27,20 @@ except ImportError:
     GraphRetriever = None
     _GRAPHRAG_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+_SLOW_THRESHOLD = 2.0  # seconds — steps above this log as WARNING
+
+
+@contextmanager
+def _timed(label: str):
+    t0 = time.perf_counter()
+    yield
+    elapsed = time.perf_counter() - t0
+    if elapsed > _SLOW_THRESHOLD:
+        logger.warning("SLOW init — %s took %.2fs (threshold %.1fs)", label, elapsed, _SLOW_THRESHOLD)
+    else:
+        logger.info("%s ready — %.2fs", label, elapsed)
 
 
 @dataclass
@@ -55,44 +71,48 @@ class AppContainer:
         if self._started:
             return
 
+        t_total = time.perf_counter()
         logger.info("AppContainer.startup — initialising retrieval stack")
 
-        self.acl = AccessControlMiddleware()
-        self.pii_guard = PIIGuard()
+        with _timed("ACL + PIIGuard"):
+            self.acl = AccessControlMiddleware()
+            self.pii_guard = PIIGuard()
 
-        router = EmbeddingRouter()
-        self.embedder = QueryEmbedder(router=router)
-        logger.info("QueryEmbedder ready")
+        with _timed("EmbeddingRouter + QueryEmbedder"):
+            router = EmbeddingRouter()
+            self.embedder = QueryEmbedder(router=router)
 
-        self.dense_store = DenseVectorStore()
-        self.sparse_index = SparseIndex()
-        self.search_engine = HybridSearchEngine(self.dense_store, self.sparse_index)
-        logger.info(
-            "Vector stores ready (dense=%s, sparse_available=%s)",
-            type(self.dense_store).__name__,
-            getattr(self.sparse_index, "_available", False),
-        )
+        with _timed("DenseVectorStore + SparseIndex + HybridSearchEngine"):
+            self.dense_store = DenseVectorStore()
+            self.sparse_index = SparseIndex()
+            self.search_engine = HybridSearchEngine(self.dense_store, self.sparse_index)
+            logger.info(
+                "vector stores — dense=%s sparse_available=%s",
+                type(self.dense_store).__name__,
+                getattr(self.sparse_index, "_available", False),
+            )
 
-        self.retriever = Retriever(self.search_engine, self.dense_store)
-        logger.info("Retriever ready")
+        with _timed("Retriever"):
+            self.retriever = Retriever(self.search_engine, self.dense_store)
 
-        self.generator = Generator()
-        self.evaluator = RAGEvaluator()
-        self.retrieval_evaluator = RetrievalEvaluator(
-            embedder=self.embedder, retriever=self.retriever
-        )
-        logger.info("Generator and evaluator ready")
+        with _timed("Generator + RAGEvaluator + RetrievalEvaluator"):
+            self.generator = Generator()
+            self.evaluator = RAGEvaluator()
+            self.retrieval_evaluator = RetrievalEvaluator(
+                embedder=self.embedder, retriever=self.retriever
+            )
 
-        self.query_understanding = QueryUnderstanding()
-        logger.info("QueryUnderstanding ready")
+        with _timed("QueryUnderstanding"):
+            self.query_understanding = QueryUnderstanding()
 
-        self.graph_retriever = self._try_init_graph_retriever()
+        with _timed("GraphRetriever"):
+            self.graph_retriever = self._try_init_graph_retriever()
 
-        self.orchestrator = RAGOrchestrator(container=self)
-        logger.info("RAGOrchestrator ready")
+        with _timed("RAGOrchestrator"):
+            self.orchestrator = RAGOrchestrator(container=self)
 
         self._started = True
-        logger.info("AppContainer.startup complete")
+        logger.info("AppContainer.startup complete — total %.2fs", time.perf_counter() - t_total)
 
     def shutdown(self) -> None:
         """Close connections gracefully."""
@@ -116,14 +136,15 @@ class AppContainer:
             logger.warning("GraphRAG enabled in config but dependencies not installed.")
             return None
         try:
-            graph_store = Neo4jGraphStore()
-            gr = GraphRetriever(
-                graph_store=graph_store,
-                vector_retriever=self.retriever,
-                search_engine=self.search_engine,
-                dense_store=self.dense_store,
-            )
-            logger.info("GraphRetriever ready")
+            with _timed("Neo4jGraphStore connect"):
+                graph_store = Neo4jGraphStore()
+            with _timed("GraphRetriever build"):
+                gr = GraphRetriever(
+                    graph_store=graph_store,
+                    vector_retriever=self.retriever,
+                    search_engine=self.search_engine,
+                    dense_store=self.dense_store,
+                )
             return gr
         except Exception as exc:
             logger.error("GraphRetriever init failed (non-fatal): %s", exc)

@@ -57,16 +57,43 @@ class DenseVectorStore:
         self._ensure_collection()
 
     def _ensure_collection(self) -> None:
-        """Create the Qdrant collection with HNSW parameters if it doesn't exist."""
-        existing = [c.name for c in self._client.get_collections().collections]
-        if self._collection in existing:
-            logger.debug(
-                f"Qdrant collection '{self._collection}' already exists — skipping creation"
-            )
-            return
+        """
+        Create the Qdrant collection with HNSW parameters if it doesn't exist.
 
+        If the collection already exists but its vector dimension differs from the
+        one in config (e.g. after switching embedding models), the old collection
+        is deleted and recreated automatically.  All previously indexed vectors are
+        lost and the knowledge base must be re-ingested.
+        """
         hnsw_cfg = self._vs_cfg["hnsw"]
         dim = self.cfg.embeddings["embedding_dimensions"]
+
+        existing = [c.name for c in self._client.get_collections().collections]
+        if self._collection in existing:
+            # Verify the stored dimension matches the configured one
+            info = self._client.get_collection(self._collection)
+            try:
+                existing_dim = info.config.params.vectors.size
+            except AttributeError:
+                existing_dim = None
+
+            if existing_dim == dim:
+                logger.debug(
+                    "Qdrant collection '%s' already exists (dim=%d) — skipping creation",
+                    self._collection, dim,
+                )
+                return
+
+            # Dimension mismatch — recreate (embedding model was changed)
+            logger.warning(
+                "Qdrant collection '%s' has dimension %d but config requires %d "
+                "(embedding model changed). Deleting collection — all indexed vectors "
+                "are lost. Re-run the ingestion pipeline to rebuild the index.",
+                self._collection,
+                existing_dim,
+                dim,
+            )
+            self._client.delete_collection(self._collection)
 
         self._client.create_collection(
             collection_name=self._collection,
@@ -81,7 +108,10 @@ class DenseVectorStore:
             ),
             on_disk_payload=True,
         )
-        logger.info(f"Created Qdrant collection '{self._collection}' with HNSW(m={hnsw_cfg['m']})")
+        logger.info(
+            "Created Qdrant collection '%s' with HNSW(m=%d, dim=%d)",
+            self._collection, hnsw_cfg["m"], dim,
+        )
 
     def upsert(self, chunk: ParsedChunk, vector: np.ndarray, namespace: str | None = None) -> None:
         """Upsert a chunk and its embedding into Qdrant."""

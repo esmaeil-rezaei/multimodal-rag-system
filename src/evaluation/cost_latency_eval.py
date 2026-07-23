@@ -237,6 +237,7 @@ class LatencyTimer:
         finally:
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             self.stage_ms[name] = self.stage_ms.get(name, 0.0) + elapsed_ms
+            logger.info("Stage %-30s %.1f ms", name, elapsed_ms)
 
     @property
     def total_ms(self) -> float:

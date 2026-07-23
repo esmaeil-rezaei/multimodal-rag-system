@@ -879,6 +879,18 @@ main {
 }
 .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
 .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+.status-label {
+  font-size: 12px;
+  color: var(--text-3);
+  font-style: italic;
+  white-space: nowrap;
+}
+.stream-cursor {
+  display: inline-block;
+  color: var(--accent);
+  animation: blink-cursor 0.75s step-end infinite;
+}
+@keyframes blink-cursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pulse {
   0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
   40% { opacity: 1; transform: scale(1); }
@@ -1410,20 +1422,78 @@ async function submitQuery() {
     token:      _authToken ? _authToken : null,         // logged-in users send token
   };
 
+  // Generate a client-side query ID for streaming (server doesn't assign one)
+  const queryId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+  const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
   try {
-    const res = await fetch('/query', {
+    const res = await fetch('/query/stream', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Server error ${res.status}`);
-    const data = await res.json();
-    thinkingEl.remove();
-    appendAssistantMessage(data, q);
-    addToHistory(q, data.query_id);
-    scrollToBottom();
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuf    = '';   // incomplete SSE line accumulator
+    let tokenBuf  = '';   // all answer text received so far
+    let msgRow    = null;
+    let answerEl  = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      sseBuf += decoder.decode(value, { stream: true });
+
+      // SSE messages are separated by double newlines
+      const parts = sseBuf.split('\n\n');
+      sseBuf = parts.pop();   // keep the incomplete trailing fragment
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith('data: ')) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (evt.event === 'status') {
+          // Show live phase label inside the thinking bubble
+          const dotsEl = thinkingEl.querySelector('.thinking-dots');
+          if (dotsEl) dotsEl.innerHTML = `<span class="status-label">${esc(evt.message)}</span>`;
+
+        } else if (evt.event === 'token') {
+          // First token: swap thinking bubble for the answer row
+          if (!msgRow) {
+            thinkingEl.remove();
+            msgRow   = _appendStreamingSkeleton(queryId, ts);
+            answerEl = document.getElementById('answer-' + queryId);
+          }
+          tokenBuf += evt.content;
+          if (answerEl) {
+            // During streaming [CITE:uuid] markers haven't been numbered yet —
+            // replace them with a compact placeholder so they don't clutter the view
+            const displayText = tokenBuf.replace(/\[CITE:[^\]]+\]/g, '[·]');
+            answerEl.innerHTML = renderMarkdown(displayText) + '<span class="stream-cursor">▋</span>';
+            scrollToBottom();
+          }
+
+        } else if (evt.event === 'done') {
+          // The server's 'answer' field has citations replaced with [1], [2] etc.
+          // Fall back to raw tokenBuf only if the server omitted it.
+          const finalAnswer = (evt.answer && evt.answer.trim()) ? evt.answer : tokenBuf;
+          if (answerEl) answerEl.innerHTML = renderMarkdown(finalAnswer);
+          _finalizeStreamedMessage(queryId, evt, q, finalAnswer, selectedNs);
+          addToHistory(q, queryId);
+          scrollToBottom();
+
+        } else if (evt.event === 'error') {
+          if (thinkingEl.parentNode) thinkingEl.remove();
+          appendErrorMessage(evt.message || 'An error occurred.');
+        }
+      }
+    }
   } catch (err) {
-    thinkingEl.remove();
+    if (thinkingEl.parentNode) thinkingEl.remove();
     appendErrorMessage(err.message);
   } finally {
     btn.disabled = false;
@@ -1475,7 +1545,9 @@ function appendAssistantMessage(data, question) {
   const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   /* badges */
-  let badges = `<span class="badge badge-model">${esc(data.model_used)}</span>`;
+  const agentLabel = data.agent_name || data.model_used || '';
+  const modelTip   = data.model_used ? ` title="${esc(data.model_used)}"` : '';
+  let badges = agentLabel ? `<span class="badge badge-model"${modelTip}>${esc(agentLabel)}</span>` : '';
   if (data.namespace_used && data.namespace_used !== 'default') {
     badges += `<span class="badge badge-ns">${esc(data.namespace_used)}</span>`;
   }
@@ -1570,6 +1642,119 @@ function appendErrorMessage(msg) {
       </div>
     </div>`;
   msgs.appendChild(row);
+}
+
+/* ── Streaming helpers ──────────────────────────────────────────────────── */
+
+/**
+ * Create the assistant message row skeleton immediately on first token.
+ * Badges and citations are filled in by _finalizeStreamedMessage() on 'done'.
+ */
+function _appendStreamingSkeleton(queryId, ts) {
+  const msgs = document.getElementById('messages');
+  const row  = document.createElement('div');
+  row.className = 'msg-row assistant';
+  row.id = 'msg-' + queryId;
+  row.innerHTML = `
+    <div class="msg-inner">
+      <div class="avatar ai">R</div>
+      <div class="msg-content-wrap">
+        <div class="msg-meta-top" id="meta-${queryId}">
+          <span class="msg-ts">${esc(ts)}</span>
+        </div>
+        <div class="msg-answer" id="answer-${queryId}"></div>
+        <div id="conflict-${queryId}"></div>
+        <div id="citations-${queryId}"></div>
+        <div class="feedback-bar" id="fb-bar-${queryId}" style="display:none">
+          <span class="fb-label">Helpful?</span>
+          <button class="fb-btn" id="fb-like-${queryId}"
+            onclick="handleFeedback('${queryId}', 'like')">👍 Yes</button>
+          <button class="fb-btn" id="fb-dislike-${queryId}"
+            onclick="openComment('${queryId}')">👎 No</button>
+          <button class="fb-btn" id="fb-unknown-${queryId}"
+            onclick="handleFeedback('${queryId}', 'unknown')">🤷 Can't tell</button>
+          <button class="btn-copy" id="btn-copy-${queryId}"
+            onclick="copyResponse('${queryId}')" title="Copy answer to clipboard">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2 2v1"/>
+            </svg>
+            Copy
+          </button>
+        </div>
+        <div class="comment-wrap" id="comment-wrap-${queryId}">
+          <textarea id="comment-text-${queryId}"
+            placeholder="What went wrong? What were you expecting? (optional)"></textarea>
+          <button class="btn-send-comment"
+            onclick="submitDislike('${queryId}')">Send feedback</button>
+        </div>
+      </div>
+    </div>`;
+  msgs.appendChild(row);
+  scrollToBottom();
+  return row;
+}
+
+/**
+ * Called on 'done' SSE event.  Fills badges, citations, conflict block,
+ * stores the answer for copy/feedback, and reveals the feedback bar.
+ */
+function _finalizeStreamedMessage(queryId, evt, question, answer, namespaceUsed) {
+  _answerStore[queryId] = { question, answer };
+
+  // --- badges ---
+  const meta = document.getElementById('meta-' + queryId);
+  if (meta) {
+    let badges = '';
+    const _agentLabel = evt.agent_name || evt.model_used || '';
+    const _modelTip   = evt.model_used ? ` title="${esc(evt.model_used)}"` : '';
+    if (_agentLabel) badges += `<span class="badge badge-model"${_modelTip}>${esc(_agentLabel)}</span>`;
+    if (namespaceUsed && namespaceUsed !== 'default') {
+      badges += `<span class="badge badge-ns">${esc(namespaceUsed)}</span>`;
+    }
+    if (evt.faithfulness_score != null) {
+      const pct = (evt.faithfulness_score * 100).toFixed(0);
+      const low = evt.faithfulness_score < 0.5 ? ' low' : '';
+      badges += `<span class="badge badge-faith${low}">⬡ ${pct}% faithful</span>`;
+    }
+    if (evt.has_conflict) badges += `<span class="badge badge-conflict">⚡ conflict</span>`;
+    const tsEl = meta.querySelector('.msg-ts');
+    meta.innerHTML = badges + (tsEl ? tsEl.outerHTML : '');
+  }
+
+  // --- citations ---
+  if (evt.citations && evt.citations.length) {
+    const citEl = document.getElementById('citations-' + queryId);
+    if (citEl) {
+      const citRows = evt.citations.map((c, i) => {
+        const fullId  = c.chunk_id || '';
+        const shortId = fullId.slice(0, 8);
+        const src     = c.source_name || c.source_file || 'unknown';
+        const date    = (c.ingestion_ts || '').slice(0, 10);
+        return `<div class="cite-row">
+          <span class="cite-index">[${i + 1}]</span>
+          <span>
+            <span class="chunk-ref" data-chunk-id="${esc(fullId)}" title="Hover to preview chunk">${esc(shortId)}…</span>
+            <span style="color:var(--text-3)"> · </span>${esc(src)}${date ? `<span style="color:var(--text-3)"> · </span>${esc(date)}` : ''}
+          </span>
+        </div>`;
+      }).join('');
+      citEl.innerHTML = `<div class="citations-block">
+        <div class="citations-label">Sources · ${evt.citations.length}</div>
+        ${citRows}
+      </div>`;
+    }
+  }
+
+  // --- conflict ---
+  if (evt.has_conflict && evt.conflict_resolution) {
+    const confEl = document.getElementById('conflict-' + queryId);
+    if (confEl) confEl.innerHTML = `<div class="conflict-block">⚡ ${esc(evt.conflict_resolution)}</div>`;
+  }
+
+  // --- show feedback bar ---
+  const fbBar = document.getElementById('fb-bar-' + queryId);
+  if (fbBar) fbBar.style.display = '';
 }
 
 const _chunkCache = {};

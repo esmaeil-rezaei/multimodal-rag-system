@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncGenerator
 
+import httpx
 import openai
 
 from src.config.settings import get_config, get_secrets
 from src.retrieval.retriever import ContextItem
 from src.utils.logger import get_logger
+from src.utils.retry import openai_retry
 
 logger = get_logger(__name__)
 
@@ -38,22 +40,43 @@ class Generator:
         cfg = get_config()
         sec = get_secrets()
         self._gen_cfg = cfg.generation
-        self._openai = openai.OpenAI(api_key=sec.openai_api_key)
+        _timeout = httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
+        self._openai = openai.OpenAI(api_key=sec.openai_api_key, timeout=_timeout, max_retries=0)
+        self._async_openai = openai.AsyncOpenAI(api_key=sec.openai_api_key, timeout=_timeout, max_retries=0)
 
+    @openai_retry
     def generate(
         self,
         query: str,
         context_items: list[ContextItem],
         extra_instructions: list[str] | None = None,
+        _conflict_info: tuple[bool, str | None] | None = None,
+        use_fast_model: bool = False,
     ) -> GenerationResult:
-        """Generate a grounded answer from the query and retrieved context."""
+        """
+        Generate a grounded answer from the query and retrieved context.
 
-        has_conflict, conflict_note = self._detect_conflicts(context_items)
+        Args:
+            _conflict_info: Pre-computed (has_conflict, conflict_note) tuple.
+                            When provided, skips the internal ``_detect_conflicts``
+                            call (saves ~1 s).
+            use_fast_model: When True, uses ``generation.fast_model`` (gpt-4o-mini)
+                            instead of the default model.  Appropriate for queries
+                            with ≤ 2 context items where the simpler model suffices.
+        """
+        if _conflict_info is not None:
+            has_conflict, conflict_note = _conflict_info
+        else:
+            has_conflict, conflict_note = self._detect_conflicts(context_items)
 
         system_prompt = self._build_system_prompt(extra_instructions=extra_instructions)
         user_prompt = self._build_user_prompt(query, context_items, conflict_note)
 
-        model = self._gen_cfg["model"]
+        model = (
+            self._gen_cfg.get("fast_model", self._gen_cfg["model"])
+            if use_fast_model
+            else self._gen_cfg["model"]
+        )
         response = self._openai.chat.completions.create(
             model=model,
             messages=[
@@ -100,6 +123,94 @@ class Generator:
             },
         )
         return result
+
+    @openai_retry
+    async def _async_create_stream(self, **kwargs):
+        return await self._async_openai.chat.completions.create(**kwargs)
+
+    async def generate_stream(
+        self,
+        query: str,
+        context_items: list[ContextItem],
+        extra_instructions: list[str] | None = None,
+        _conflict_info: tuple[bool, str | None] | None = None,
+        use_fast_model: bool = False,
+    ) -> AsyncGenerator[str | GenerationResult, None]:
+        """
+        Async generator that streams generation tokens.
+
+        Yields:
+            str: individual text tokens as they arrive from OpenAI.
+            GenerationResult: a single final item once the stream is exhausted,
+                              containing the full answer with citations extracted.
+
+        Args:
+            _conflict_info: Pre-computed (has_conflict, conflict_note) tuple.
+                            When provided, skips the blocking ``_detect_conflicts``
+                            call — the orchestrator starts it concurrently before
+                            calling this method.
+            use_fast_model: When True, uses ``generation.fast_model`` instead of
+                            the default model (appropriate for ≤ 2 context items).
+
+        Usage::
+            async for item in generator.generate_stream(query, context_items):
+                if isinstance(item, str):
+                    yield_sse_token(item)
+                elif isinstance(item, GenerationResult):
+                    result = item   # citations, faithfulness, etc.
+        """
+        if _conflict_info is not None:
+            has_conflict, conflict_note = _conflict_info
+        else:
+            # Blocking call — wrap in thread for concurrency safety
+            has_conflict, conflict_note = self._detect_conflicts(context_items)
+
+        system_prompt = self._build_system_prompt(extra_instructions=extra_instructions)
+        user_prompt = self._build_user_prompt(query, context_items, conflict_note)
+        model = (
+            self._gen_cfg.get("fast_model", self._gen_cfg["model"])
+            if use_fast_model
+            else self._gen_cfg["model"]
+        )
+
+        full_buf: list[str] = []
+
+        stream = await self._async_create_stream(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=self._gen_cfg["temperature"],
+            max_tokens=self._gen_cfg["max_tokens"],
+            stream=True,
+        )
+
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                full_buf.append(delta)
+                yield delta
+
+        # Emit the completed result as the final item
+        full_text = "".join(full_buf)
+        answer_clean, citations = self._extract_citations(full_text, context_items)
+        sources = list(
+            {item.chunk.source_file for item in context_items if item.chunk.source_file}
+        )
+        result = GenerationResult(
+            answer=answer_clean,
+            citations=citations,
+            sources=sources,
+            has_conflict=has_conflict,
+            conflict_resolution=conflict_note,
+            model_used=model,
+        )
+        logger.info(
+            "Streaming generation complete",
+            extra={"citations": len(citations), "has_conflict": has_conflict},
+        )
+        yield result
 
     def _build_system_prompt(self, extra_instructions: list[str] | None = None) -> str:
         """System prompt enforcing grounded, citation-based generation."""
@@ -152,6 +263,7 @@ class Generator:
         prompt += f"Question: {query}\n\nAnswer (cite every claim with [CITE:chunk_id]):"
         return prompt
 
+    @openai_retry
     def _detect_conflicts(self, context_items: list[ContextItem]) -> tuple[bool, str | None]:
         """Lightweight LLM-based conflict detection across retrieved chunks."""
         if not self._gen_cfg["conflict_handling"]["detect_conflicts"]:
@@ -246,6 +358,7 @@ class Generator:
         else:
             return self._ragas_faithfulness(answer, context_items)
 
+    @openai_retry
     def _ragas_faithfulness(self, answer: str, context_items: list[ContextItem]) -> float:
         """Estimate faithfulness by extracting claims and verifying each against the context."""
 
@@ -296,6 +409,7 @@ class Generator:
         )
         return score
 
+    @openai_retry
     def _selfcheck_gpt_faithfulness(
         self,
         query: str,
